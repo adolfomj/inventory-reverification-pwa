@@ -1,197 +1,486 @@
 <!DOCTYPE html>
-<html lang="es" data-theme="system">
+<html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Reverificación de Inventario por Zonas</title>
-  
-  <!-- PWA Meta Tags -->
-  <meta name="theme-color" content="#6366f1">
-  <meta name="description" content="Aplicación PWA para reverificación de inventario por zonas de responsabilidad con almacenamiento local.">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="manifest" href="manifest.json">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%236366f1'><path d='M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z'/></svg>">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <!-- Google Fonts: Roboto & Material Symbols -->
+  <title>Control de Inventario</title>
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
 
-  <!-- Estilos principales -->
-  <link rel="stylesheet" href="css/style.css">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
+    rel="stylesheet"
+  >
+
+  <link rel="stylesheet" href="css/styles.css">
 </head>
+
 <body>
 
-  <!-- Encabezado Fijo -->
-  <header class="app-header" id="app-header">
-    <div class="header-content">
+  <!-- ==========================================
+       APP
+       ========================================== -->
+
+  <div id="app">
+
+    <!-- HEADER -->
+
+    <header class="app-header">
+
       <div class="header-left">
-        <button class="icon-btn hidden" id="btn-back" title="Volver a Zonas">
-          <span class="material-symbols-outlined">arrow_back</span>
+
+        <button
+          class="icon-button"
+          id="btn-back"
+          title="Volver"
+        >
+          <span class="material-symbols-outlined">
+            arrow_back
+          </span>
         </button>
-        <div class="header-titles">
-          <h1 id="header-title">Zonas de Responsabilidad</h1>
-          <span class="header-subtitle" id="header-subtitle">Reverificación de Inventario</span>
+
+        <div class="header-title-container">
+
+          <h1 id="page-title">
+            Control de Inventario
+          </h1>
+
+          <span id="page-subtitle"></span>
+
         </div>
+
       </div>
+
       <div class="header-right">
-        <button class="btn btn-sm btn-primary save-btn" id="btn-save" title="Guardar cambios">
-          <span class="material-symbols-outlined">save</span>
-          <span>Guardar</span>
-        </button>
-        <button class="btn btn-sm btn-primary" id="btn-file-save" title="Guardar en archivo">
-          <span class="material-symbols-outlined">download</span>
-          <span>Archivo</span>
-        </button>
-        <button class="btn btn-sm btn-primary" id="btn-file-load" title="Cargar desde archivo">
-          <span class="material-symbols-outlined">upload</span>
-          <span>Cargar</span>
-        </button>
-        <button class="icon-btn hidden" id="btn-export-zone" title="Exportar esta Zona (JSON)">
-          <span class="material-symbols-outlined">file_download</span>
-        </button>
-        <button class="icon-btn" id="btn-global-export" title="Exportar Respaldo Completo">
-          <span class="material-symbols-outlined">ios_share</span>
-        </button>
-        <button class="icon-btn" id="btn-global-import" title="Importar Archivo JSON">
-          <span class="material-symbols-outlined">file_upload</span>
-        </button>
-        <button class="icon-btn" id="theme-toggle-btn" title="Cambiar Tema">
-          <span class="material-symbols-outlined">dark_mode</span>
-        </button>
-      </div>
-    </div>
-  </header>
 
-  <!-- Contenedor Principal de la App -->
-  <main class="app-container">
-    
-    <!-- 1. VISTA: LISTA DE ZONAS -->
-    <section id="zones-view" class="view-section">
-      <div class="info-banner">
-        <span class="material-symbols-outlined">backup</span>
-        <div>
-          <strong>Respaldo y restauración</strong>
-          <p>Guarda todo en un archivo JSON y luego impórtalo en otra página o navegador para recuperar tus datos.</p>
-        </div>
+        <button
+          class="icon-button"
+          id="btn-theme"
+          title="Cambiar tema"
+        >
+          <span class="material-symbols-outlined">
+            dark_mode
+          </span>
+        </button>
+
       </div>
 
-      <div class="backup-actions">
-        <button class="btn btn-primary btn-sm" id="btn-backup-export">Guardar respaldo</button>
-        <button class="btn btn-outlined btn-sm" id="btn-backup-import">Cargar respaldo</button>
-      </div>
+    </header>
 
-      <!-- Buscador de Zonas -->
-      <div class="search-box">
-        <div class="input-with-icon">
-          <span class="material-symbols-outlined search-icon">search</span>
-          <input type="text" id="zone-search-input" class="input-field" placeholder="Buscar zona por nombre...">
-        </div>
-      </div>
 
-      <!-- Grid de Tarjetas de Zonas -->
-      <div id="zones-list-container" class="zones-grid">
-        <!-- Renderizado dinámico desde JS -->
-      </div>
+    <!-- ==========================================
+         CONTENIDO PRINCIPAL
+         ========================================== -->
 
-      <!-- Botón Flotante (FAB) para Nueva Zona -->
-      <button class="fab" id="fab-add-zone" title="Nueva Zona">
-        <span class="material-symbols-outlined">add</span>
-      </button>
-    </section>
+    <main id="main-content">
 
-    <!-- 2. VISTA: DETALLE DE ZONA (ARTÍCULOS Y NOVEDADES) -->
-    <section id="zone-detail-view" class="view-section hidden">
-      
-      <!-- Selector de Sub-Vistas (Artículos vs Novedades) -->
-      <div class="view-toggle-bar">
-        <button class="toggle-view-btn active" id="btn-toggle-articles">
-          <span class="material-symbols-outlined text-icon">category</span>
-          Artículos
-        </button>
-        <button class="toggle-view-btn" id="btn-toggle-novelties">
-          <span class="material-symbols-outlined text-icon">assignment_late</span>
-          Novedades / Tareas
-        </button>
-      </div>
 
-      <!-- SUB-VISTA 1: ARTÍCULOS -->
-      <div id="articles-sub-view" class="sub-view-container">
-        <!-- Tarjetas de Estadísticas Superior -->
-        <div id="stats-container" class="stats-grid">
-          <!-- Renderizado dinámico desde JS -->
-        </div>
+      <!-- ========================================
+           1. VISTA: LISTA DE ZONAS
+           ======================================== -->
 
-        <!-- Buscador de Artículos -->
-        <div class="search-box">
-          <div class="input-with-icon">
-            <span class="material-symbols-outlined search-icon">search</span>
-            <input type="text" id="article-search-input" class="input-field" placeholder="Buscar por ID o Nombre...">
+      <section
+        id="zones-view"
+        class="view-section"
+      >
+
+        <div class="info-banner">
+
+          <span class="material-symbols-outlined">
+            backup
+          </span>
+
+          <div>
+
+            <strong>
+              Respaldo y restauración
+            </strong>
+
+            <p>
+              Guarda todo en un archivo JSON y luego
+              impórtalo en otra página o navegador
+              para recuperar tus datos.
+            </p>
+
           </div>
+
         </div>
 
-        <!-- Barra de Filtros Tabular -->
-        <nav class="filter-bar" id="filter-bar">
-          <button class="filter-tab active" data-filter="todos">Todos</button>
-          <button class="filter-tab" data-filter="pendientes">Pendientes</button>
-          <button class="filter-tab" data-filter="verificados">Verificados</button>
-          <button class="filter-tab" data-filter="faltantes">Faltantes</button>
-          <button class="filter-tab" data-filter="sobrantes">Sobrantes</button>
-        </nav>
 
-        <!-- Lista de Tarjetas de Artículos -->
-        <div id="articles-list-container" class="articles-list">
+        <div class="backup-actions">
+
+          <button
+            class="btn btn-primary btn-sm"
+            id="btn-backup-export"
+          >
+            Guardar respaldo
+          </button>
+
+          <button
+            class="btn btn-outlined btn-sm"
+            id="btn-backup-import"
+          >
+            Cargar respaldo
+          </button>
+
+        </div>
+
+
+        <!-- Buscador de Zonas -->
+
+        <div class="search-box">
+
+          <div class="input-with-icon">
+
+            <span class="material-symbols-outlined search-icon">
+              search
+            </span>
+
+            <input
+              type="text"
+              id="zone-search-input"
+              class="input-field"
+              placeholder="Buscar zona por nombre..."
+            >
+
+          </div>
+
+        </div>
+
+
+        <!-- Grid de Tarjetas de Zonas -->
+
+        <div
+          id="zones-list-container"
+          class="zones-grid"
+        >
           <!-- Renderizado dinámico desde JS -->
         </div>
 
-        <!-- Botón Flotante (FAB) para Nuevo Artículo -->
-        <button class="fab" id="fab-add-article" title="Nuevo Artículo">
-          <span class="material-symbols-outlined">add</span>
+
+        <!-- Botón Flotante -->
+
+        <button
+          class="fab"
+          id="fab-add-zone"
+          title="Nueva Zona"
+        >
+
+          <span class="material-symbols-outlined">
+            add
+          </span>
+
         </button>
-      </div>
 
-      <!-- SUB-VISTA 2: NOVEDADES / TAREAS -->
-      <div id="novelties-sub-view" class="sub-view-container hidden">
-        <!-- Estadísticas de Novedades -->
-        <div id="novelty-stats-container" class="stats-grid">
-          <!-- Renderizado dinámico desde JS -->
+      </section>
+
+
+
+      <!-- ========================================
+           2. VISTA: DETALLE DE ZONA
+           ======================================== -->
+
+      <section
+        id="zone-detail-view"
+        class="view-section hidden"
+      >
+
+
+        <!-- Selector de Sub-Vistas -->
+
+        <div class="view-toggle-bar">
+
+          <button
+            class="toggle-view-btn active"
+            id="btn-toggle-articles"
+          >
+
+            <span class="material-symbols-outlined text-icon">
+              category
+            </span>
+
+            Artículos
+
+          </button>
+
+
+          <button
+            class="toggle-view-btn"
+            id="btn-toggle-novelties"
+          >
+
+            <span class="material-symbols-outlined text-icon">
+              assignment_late
+            </span>
+
+            Novedades / Tareas
+
+          </button>
+
         </div>
 
-        <!-- Lista de Novedades / Tareas -->
-        <div id="novelties-list-container" class="articles-list">
-          <!-- Renderizado dinámico desde JS -->
+
+
+        <!-- ======================================
+             SUB-VISTA: ARTÍCULOS
+             ====================================== -->
+
+        <div
+          id="articles-sub-view"
+          class="sub-view-container"
+        >
+
+
+          <!-- Estadísticas -->
+
+          <div
+            id="stats-container"
+            class="stats-grid"
+          >
+            <!-- Renderizado dinámico desde JS -->
+          </div>
+
+
+          <!-- Buscador de Artículos -->
+
+          <div class="search-box">
+
+            <div class="input-with-icon">
+
+              <span class="material-symbols-outlined search-icon">
+                search
+              </span>
+
+              <input
+                type="text"
+                id="article-search-input"
+                class="input-field"
+                placeholder="Buscar por ID o Nombre..."
+              >
+
+            </div>
+
+          </div>
+
+
+          <!-- Barra de Filtros -->
+
+          <nav
+            class="filter-bar"
+            id="filter-bar"
+          >
+
+            <button
+              class="filter-tab active"
+              data-filter="todos"
+            >
+              Todos
+            </button>
+
+            <button
+              class="filter-tab"
+              data-filter="pendientes"
+            >
+              Pendientes
+            </button>
+
+            <button
+              class="filter-tab"
+              data-filter="verificados"
+            >
+              Verificados
+            </button>
+
+            <button
+              class="filter-tab"
+              data-filter="faltantes"
+            >
+              Faltantes
+            </button>
+
+            <button
+              class="filter-tab"
+              data-filter="sobrantes"
+            >
+              Sobrantes
+            </button>
+
+          </nav>
+
+
+          <!-- Lista de Artículos -->
+
+          <div
+            id="articles-list-container"
+            class="articles-list"
+          >
+            <!-- Renderizado dinámico desde JS -->
+          </div>
+
+
+          <!-- Botón Nuevo Artículo -->
+
+          <button
+            class="fab"
+            id="fab-add-article"
+            title="Nuevo Artículo"
+          >
+
+            <span class="material-symbols-outlined">
+              add
+            </span>
+
+          </button>
+
         </div>
 
-        <!-- Botón Flotante (FAB) para Nueva Novedad -->
-        <button class="fab" id="fab-add-novelty" title="Nueva Novedad / Tarea">
-          <span class="material-symbols-outlined">add_comment</span>
-        </button>
-      </div>
 
-    </section>
 
-  </main>
+        <!-- ======================================
+             SUB-VISTA: NOVEDADES
+             ====================================== -->
 
-  <!-- Contenedor de Modales y Diálogos -->
-  <div id="modal-container" class="modal-container hidden"></div>
+        <div
+          id="novelties-sub-view"
+          class="sub-view-container hidden"
+        >
 
-  <!-- Contenedor de Toasts (Notificaciones) -->
-  <div id="toast-container" class="toast-container"></div>
 
-  <!-- Scripts JavaScript Modulares -->
-<script>
- // Supabase configuration
+          <!-- Estadísticas -->
 
-window.SUPABASE_URL = "https://rserzjanocqmgubdevow.supabase.co";
+          <div
+            id="novelty-stats-container"
+            class="stats-grid"
+          >
+            <!-- Renderizado dinámico desde JS -->
+          </div>
 
-window.SUPABASE_ANON_KEY = "sb_publishable_O4xu90RCVX9IRDT72uEdaQ_-94TUNrz";
-</script>
-<script type="module" src="js/supabase.js"></script>
-<script src="js/data.js"></script>
-<script src="js/storage.js"></script>
-<script src="js/ui.js"></script>
-<script src="js/app.js"></script>
-</body>
+
+          <!-- Lista de Novedades -->
+
+          <div
+            id="novelties-list-container"
+            class="articles-list"
+          >
+            <!-- Renderizado dinámico desde JS -->
+          </div>
+
+
+          <!-- Botón Nueva Novedad -->
+
+          <button
+            class="fab"
+            id="fab-add-novelty"
+            title="Nueva Novedad / Tarea"
+          >
+
+            <span class="material-symbols-outlined">
+              add_comment
+            </span>
+
+          </button>
+
+        </div>
+
+      </section>
+
+    </main>
+
+
+
+    <!-- ==========================================
+         MODALES
+         ========================================== -->
+
+    <div
+      id="modal-container"
+      class="modal-container hidden"
+    ></div>
+
+
+    <!-- ==========================================
+         TOASTS
+         ========================================== -->
+
+    <div
+      id="toast-container"
+      class="toast-container"
+    ></div>
+
+
+
+    <!-- ==========================================
+         SUPABASE
+         ========================================== -->
+
+    <script>
+
+      /*
+       * Configuración de Supabase
+       */
+
+      window.SUPABASE_URL =
+        "https://rserzjanocqmgubdevow.supabase.co";
+
+      window.SUPABASE_ANON_KEY =
+        "sb_publishable_O4xu90RCVX9IRDT72uEdaQ_-94TUNrz";
+
+    </script>
+
+
+    <!-- ==========================================
+         CARGAR SDK DE SUPABASE
+         ========================================== -->
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+
+    <!-- ==========================================
+         CREAR CLIENTE SUPABASE
+         ========================================== -->
+
+    <script>
+
+      if (
+        window.supabase &&
+        typeof window.supabase.createClient === "function"
+      ) {
+
+        window.supabaseClient =
+          window.supabase.createClient(
+            window.SUPABASE_URL,
+            window.SUPABASE_ANON_KEY
+          );
+
+        console.log(
+          "[Supabase] Cliente inicializado correctamente"
+        );
+
+      } else {
+
+        console.error(
+          "[Supabase] No se pudo cargar el SDK de Supabase"
+        );
+
+      }
+
+    </script>
+
+
+    <!-- ==========================================
+         ARCHIVOS DE LA APLICACIÓN
+         ========================================== -->
+
+    <script src="js/data.js"></script>
+
+    <script src="js/storage.js"></script>
+
+    <script src="js/ui.js"></script>
+
+    <script src="js/app.js"></script>
+
+
+  </body>
 </html>
