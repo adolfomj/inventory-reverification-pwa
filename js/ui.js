@@ -12,14 +12,11 @@ const InventoryUI = (() => {
     headerTitle: document.getElementById('header-title'),
     headerSubtitle: document.getElementById('header-subtitle'),
     btnBack: document.getElementById('btn-back'),
-    btnSave: document.getElementById('btn-save'),
     btnBackupExport: document.getElementById('btn-backup-export'),
     btnBackupImport: document.getElementById('btn-backup-import'),
     btnGlobalImport: document.getElementById('btn-global-import'),
     btnGlobalExport: document.getElementById('btn-global-export'),
     themeToggleBtn: document.getElementById('theme-toggle-btn'),
-    btnFileSave: document.getElementById('btn-file-save'),
-    btnFileLoad: document.getElementById('btn-file-load'),
     
     // Contenedores de Vistas
     zonesView: document.getElementById('zones-view'),
@@ -476,6 +473,286 @@ const InventoryUI = (() => {
   }
 
   /**
+   * Renderiza un resumen compacto del calendario de la zona.
+   * @param {Array} plans - Array de planes con { id, articleId, description, startDate, endDate }
+   */
+  function renderZoneCalendar(plans = []) {
+    const container = document.getElementById('zone-calendar');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const upcoming = (plans || []).slice().sort((a,b)=> new Date(a.startDate) - new Date(b.startDate));
+
+    const header = document.createElement('div');
+    header.className = 'zone-calendar-header';
+    header.innerHTML = `<h3>Calendario de la Zona</h3><button class="btn btn-sm btn-outlined" id="btn-open-full-calendar">Abrir calendario</button>`;
+    container.appendChild(header);
+
+    const list = document.createElement('div');
+    list.className = 'zone-calendar-list';
+
+    console.log('[UI] renderZoneCalendar: plans=', upcoming.length);
+    if (upcoming.length === 0) {
+      list.innerHTML = `<div class="empty-state small">No hay planes de acción programados.</div>`;
+    } else {
+      upcoming.slice(0,6).forEach(p => {
+        const item = document.createElement('div');
+        item.className = 'zone-calendar-item';
+        item.dataset.articleId = p.articleId || '';
+
+        // color determinista
+        const palette = ['#F97316','#6366f1','#06b6d4','#ef4444','#10b981','#f59e0b','#8b5cf6','#0ea5e9'];
+        function hashString(s){ let h=0; for(let i=0;i<s.length;i++){ h=((h<<5)-h)+s.charCodeAt(i); h|=0;} return h; }
+        const color = palette[Math.abs(hashString(p.articleId || (p.id||''))) % palette.length];
+
+        item.style.borderLeft = `4px solid ${color}`;
+        item.innerHTML = `
+          <div class="zc-main"><strong class="zc-code">${escapeHTML(p.articleId || '')}</strong>
+          <div class="zc-desc">${escapeHTML(p.description)}</div></div>
+          <div class="zc-actions"><button class="btn btn-sm btn-outlined btn-zc-open">Abrir</button><button class="btn btn-sm btn-danger btn-zc-del">Eliminar</button></div>
+        `;
+
+          // set data attrs
+          item.dataset.planId = p.id || '';
+          item.dataset.articleId = p.articleId || '';
+          list.appendChild(item);
+      });
+
+        // Delegated event handling for open/delete buttons (avoids listener duplication)
+        list.addEventListener('click', (ev) => {
+          const openBtn = ev.target.closest('.btn-zc-open');
+          if (openBtn) {
+            ev.stopPropagation();
+            const item = openBtn.closest('.zone-calendar-item');
+            const articleId = item ? item.dataset.articleId : null;
+            window.dispatchEvent(new CustomEvent('zoneCalendar:openArticle', { detail: { articleId } }));
+            return;
+          }
+          const delBtn = ev.target.closest('.btn-zc-del');
+          if (delBtn) {
+            ev.stopPropagation();
+            const item = delBtn.closest('.zone-calendar-item');
+            const articleId = item ? item.dataset.articleId : null;
+            const planId = item ? item.dataset.planId : null;
+            window.dispatchEvent(new CustomEvent('fullCalendar:deletePlan', { detail: { articleId, planId } }));
+            return;
+          }
+        });
+
+      if (upcoming.length > 5) {
+        const more = document.createElement('div');
+        more.className = 'zone-calendar-more';
+        more.textContent = `+${upcoming.length - 5} más`;
+        more.addEventListener('click', () => showFullCalendar(plans));
+        list.appendChild(more);
+      }
+    }
+
+    container.appendChild(list);
+
+    const btnOpen = document.getElementById('btn-open-full-calendar');
+    if (btnOpen) btnOpen.addEventListener('click', () => showFullCalendar(plans));
+  }
+
+  /**
+   * Inserta pequeños snippets de planes en las tarjetas de artículo.
+   * @param {Array} plans
+   */
+  /**
+   * Inyecta planes de acción en las tarjetas de artículos de la zona actual.
+   * Por cada artículo, busca sus planes asociados y los muestra como snippets destacados.
+   * @param {Array} plans - Array de planes de acción con { articleId, description, startDate, endDate, ... }
+   */
+  function injectArticlePlans(plans = []) {
+    // Agrupar planes por artículo
+    const byArticle = {};
+    (plans || []).forEach(p => { 
+      if (p.articleId) {
+        (byArticle[p.articleId] = byArticle[p.articleId] || []).push(p);
+      }
+    });
+    console.log('[UI] injectArticlePlans: Planes para', Object.keys(byArticle).length, 'artículos');
+
+    // Palette de colores determinista
+    const palette = ['#F97316','#6366f1','#06b6d4','#ef4444','#10b981','#f59e0b','#8b5cf6','#0ea5e9'];
+
+    document.querySelectorAll('.article-card').forEach(card => {
+      const aid = card.dataset.id || '';
+      if (!aid) return;
+      
+      const container = card.querySelector('.article-card-body');
+      if (!container) return;
+      
+      // Limpiar planes anteriores
+      const old = card.querySelector('.article-plans-list');
+      if (old) old.remove();
+
+      const plansFor = byArticle[aid] || [];
+      
+      // Si no hay planes, no inyectar nada
+      if (plansFor.length === 0) return;
+      
+      // Crear contenedor de planes
+      const wrap = document.createElement('div');
+      wrap.className = 'article-plans-list';
+
+      // Color determinista basado en ID del artículo
+      const color = palette[Math.abs(hashString(aid)) % palette.length];
+
+      // Mostrar primeros 3 planes
+      plansFor.slice(0, 3).forEach(p => {
+        const el = document.createElement('div');
+        el.className = 'article-plan-snippet';
+        el.style.borderLeftColor = color;
+        
+        const formattedStart = InventoryData.formatDate(p.startDate);
+        const formattedEnd = p.endDate ? InventoryData.formatDate(p.endDate) : '';
+        const dateRange = formattedEnd ? `${formattedStart} — ${formattedEnd}` : formattedStart;
+        
+        el.innerHTML = `
+          <div class="ap-main">
+            <div class="ap-desc">${escapeHTML(p.description)}</div>
+            <div class="ap-meta"><span class="ap-date">${escapeHTML(dateRange)}</span></div>
+          </div>
+        `;
+        wrap.appendChild(el);
+      });
+
+      // Si hay más de 3 planes, mostrar contador y botón
+      if (plansFor.length > 3) {
+        const more = document.createElement('div');
+        more.className = 'article-plan-more';
+        more.textContent = `📋 +${plansFor.length - 3} planes más`;
+        more.title = 'Click para ver todos los planes';
+        more.addEventListener('click', (e) => {
+          e.stopPropagation();
+          showFullCalendar(plansFor);
+        });
+        wrap.appendChild(more);
+      }
+      
+      // Inyectar antes del footer
+      container.appendChild(wrap);
+    });
+
+    /**
+     * Genera hash simple para colorear de forma determinista
+     */
+    function hashString(s) {
+      let h = 0;
+      for (let i = 0; i < s.length; i++) {
+        h = ((h << 5) - h) + s.charCodeAt(i);
+        h |= 0;
+      }
+      return h;
+    }
+  }
+
+  /**
+   * Muestra un calendario mensual con eventos (soporta eventos multi-día).
+   * @param {Array} plans
+   */
+  function showFullCalendar(plans = []) {
+    const today = new Date();
+    let currentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+
+    const renderMonth = (monthDate, modal) => {
+      const year = monthDate.getFullYear();
+      const month = monthDate.getMonth();
+      const firstDay = new Date(year, month, 1).getDay();
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+      const monthName = monthDate.toLocaleString('default', { month: 'long' });
+      const title = `${monthName} ${year}`;
+
+      let grid = '<div class="full-calendar-toolbar">';
+      grid += `<button class="btn btn-sm btn-outlined" id="fc-prev">‹</button>`;
+      grid += `<div class="fc-title">${escapeHTML(title)}</div>`;
+      grid += `<button class="btn btn-sm btn-outlined" id="fc-next">›</button>`;
+      grid += '</div>';
+
+      grid += '<div class="full-calendar-grid"><div class="fc-weekdays">';
+      ['Dom','Lun','Mar','Mie','Jue','Vie','Sab'].forEach(d => grid += `<div class="fc-weekday">${d}</div>`);
+      grid += '</div><div class="fc-days">';
+
+      // blanks
+      for (let i = 0; i < firstDay; i++) grid += `<div class="fc-day empty"></div>`;
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const cellDate = new Date(year, month, d);
+        const iso = cellDate.toISOString().slice(0,10);
+        const evs = (plans || []).filter(p => {
+          const s = new Date(p.startDate).toISOString().slice(0,10);
+          const e = new Date(p.endDate).toISOString().slice(0,10);
+          return s <= iso && iso <= e;
+        });
+
+        grid += `<div class="fc-day" data-date="${iso}"><div class="fc-day-num">${d}</div>`;
+        if (evs.length) {
+              evs.slice(0,3).forEach(ev => {
+                const planId = ev.id || '';
+                const articleId = ev.articleId || '';
+                const code = escapeHTML(articleId);
+                const desc = escapeHTML(ev.description || '');
+                const palette = ['#F97316','#6366f1','#06b6d4','#ef4444','#10b981','#f59e0b','#8b5cf6','#0ea5e9'];
+                function hashString(s){ let h=0; for(let i=0;i<s.length;i++){ h=((h<<5)-h)+s.charCodeAt(i); h|=0;} return h; }
+                const color = palette[Math.abs(hashString(articleId||planId)) % palette.length];
+                grid += `<div class="fc-event" data-plan-id="${escapeHTML(planId)}" data-article-id="${escapeHTML(articleId)}" style="border-left:6px solid ${color};">` +
+                  `<div class="fc-event-main">` +
+                    `<span class="fc-color-swatch" style="background:${color}"></span>` +
+                    `<span class="fc-article-code">${code}</span>` +
+                    `<span class="fc-event-desc">${desc}</span>` +
+                  `</div>` +
+                    `</div>`;
+              });
+          if (evs.length > 3) grid += `<div class="fc-event-more">+${evs.length-3} más</div>`;
+        }
+        grid += '</div>';
+      }
+
+      grid += '</div></div>';
+
+      modal.querySelector('.modal-body').innerHTML = grid;
+
+      modal.querySelector('#fc-prev').addEventListener('click', () => {
+        currentMonth = new Date(year, month - 1, 1);
+        renderMonth(currentMonth, modal);
+      });
+      modal.querySelector('#fc-next').addEventListener('click', () => {
+        currentMonth = new Date(year, month + 1, 1);
+        renderMonth(currentMonth, modal);
+      });
+
+        // Attach event listeners to event elements for open/delete
+        setTimeout(() => {
+          const events = modal.querySelectorAll('.fc-event');
+          events.forEach(evtEl => {
+            evtEl.addEventListener('click', (e) => {
+              const planId = evtEl.dataset.planId;
+              const articleId = evtEl.dataset.articleId;
+              window.dispatchEvent(new CustomEvent('fullCalendar:openArticle', { detail: { articleId, planId } }));
+            });
+            // no delete button in full calendar (deletion handled from zone small list)
+          });
+        }, 50);
+    };
+
+    const m = showModal({
+      title: 'Calendario de Planes de Acción',
+      contentHTML: '<div class="full-calendar-root"></div>',
+      buttons: [
+        { text: 'Cerrar', class: 'btn-outlined', onClick: (e) => { m.closeModal(); } }
+      ]
+    });
+
+    // Re-fetch modal element and render
+    const modalEl = document.getElementById('modal-container');
+    const modalCard = modalEl.querySelector('.modal-card');
+    renderMonth(currentMonth, modalCard);
+    return m;
+  }
+
+  /**
    * Muestra un modal genérico personalizable.
    * @param {Object} options - { title, contentHTML, buttons: [{ text, class, onClick }] }
    */
@@ -562,5 +839,10 @@ const InventoryUI = (() => {
     showModal,
     showConfirmDialog,
     showImageModal
+    ,
+    renderZoneCalendar,
+    injectArticlePlans,
+    showFullCalendar,
+    escapeHTML
   };
 })();

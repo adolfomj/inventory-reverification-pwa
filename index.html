@@ -37,18 +37,6 @@
         </div>
       </div>
       <div class="header-right">
-        <button class="btn btn-sm btn-primary save-btn" id="btn-save" title="Guardar cambios">
-          <span class="material-symbols-outlined">save</span>
-          <span>Guardar</span>
-        </button>
-        <button class="btn btn-sm btn-primary" id="btn-file-save" title="Guardar en archivo">
-          <span class="material-symbols-outlined">download</span>
-          <span>Archivo</span>
-        </button>
-        <button class="btn btn-sm btn-primary" id="btn-file-load" title="Cargar desde archivo">
-          <span class="material-symbols-outlined">upload</span>
-          <span>Cargar</span>
-        </button>
         <button class="icon-btn hidden" id="btn-export-zone" title="Exportar esta Zona (JSON)">
           <span class="material-symbols-outlined">file_download</span>
         </button>
@@ -124,6 +112,11 @@
           <!-- Renderizado dinámico desde JS -->
         </div>
 
+        <!-- Calendario de la Zona (Planes de Acción) -->
+        <div id="zone-calendar" class="zone-calendar-container">
+          <!-- Renderizado por InventoryUI.renderZoneCalendar -->
+        </div>
+
         <!-- Buscador de Artículos -->
         <div class="search-box">
           <div class="input-with-icon">
@@ -180,60 +173,38 @@
   <!-- Contenedor de Toasts (Notificaciones) -->
   <div id="toast-container" class="toast-container"></div>
 
-  <!-- Scripts JavaScript Modulares -->
-<script>
-  // ==========================================
-  // CONFIGURACIÓN DE SUPABASE
-  // ==========================================
+  <!-- Scripts JavaScript -->
+  <script>
+    // ==========================================
+    // CONFIGURACIÓN DE SUPABASE
+    // ==========================================
+    window.SUPABASE_URL = "https://rserzjanocqmgubdevow.supabase.co";
+    window.SUPABASE_ANON_KEY = "sb_publishable_O4xu90RCVX9IRDT72uEdaQ_-94TUNrz";
+  </script>
 
-  window.SUPABASE_URL =
-    "https://rserzjanocqmgubdevow.supabase.co";
+  <!-- Carga del SDK de Supabase -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    if (window.supabase && typeof window.supabase.createClient === "function") {
+      window.supabaseClient = window.supabase.createClient(
+        window.SUPABASE_URL,
+        window.SUPABASE_ANON_KEY
+      );
+      console.log("[Supabase] Cliente inicializado correctamente");
+    } else {
+      console.error("[Supabase] No se pudo cargar el SDK");
+    }
+  </script>
 
-  window.SUPABASE_ANON_KEY =
-    "sb_publishable_O4xu90RCVX9IRDT72uEdaQ_-94TUNrz";
-</script>
-
-
-<!-- ==========================================
-     CARGAR SUPABASE
-     ========================================== -->
-
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
-
-<!-- ==========================================
-     CREAR CLIENTE SUPABASE
-     ========================================== -->
-
-<script>
-  if (
-    window.supabase &&
-    typeof window.supabase.createClient === "function"
-  ) {
-    window.supabaseClient = window.supabase.createClient(
-      window.SUPABASE_URL,
-      window.SUPABASE_ANON_KEY
-    );
-
-    console.log(
-      "[Supabase] Cliente inicializado correctamente"
-    );
-  } else {
-    console.error(
-      "[Supabase] No se pudo cargar el SDK"
-    );
-  }
-</script>
-
-
-<!-- ==========================================
-     ARCHIVOS DE LA APLICACIÓN
-     ========================================== -->
-
-<script src="js/data.js"></script>
-<script src="js/storage.js"></script>
-<script src="js/ui.js"></script>
-<script src="js/app.js"></script>
-
+  <!-- Lógica de la aplicación -->
+  <script src="js/data.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>
+
+
+
+
+

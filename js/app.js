@@ -67,20 +67,6 @@ document.addEventListener('DOMContentLoaded', () => {
       InventoryUI.showZonesView();
       await refreshZonesView();
     });
-
-    InventoryUI.elements.btnSave?.addEventListener('click', async () => {
-      try {
-        await InventoryStorage.saveCurrentState();
-        InventoryUI.showToast('Cambios guardados.', 'success');
-        if (AppState.activeZoneId) {
-          await refreshZoneDetailView();
-        } else {
-          await refreshZonesView();
-        }
-      } catch (err) {
-        InventoryUI.showToast(err.message || 'No se pudo guardar.', 'error');
-      }
-    });
   }
 
   // ─── Vista de Zonas ───────────────────────────────────────────────────────────
@@ -137,6 +123,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const stats = InventoryData.calculateZoneStats(zone.articles);
       InventoryUI.renderStats(stats);
 
+      // Renderizar calendario de la zona (planes de acción)
+      try {
+        let zonePlans = await InventoryStorage.getActionPlansForZone(AppState.activeZoneId);
+        // enriquecer con nombre de artículo si está disponible
+        zonePlans = zonePlans.map(p => {
+          const art = (zone.articles || []).find(a => a.id === p.articleId);
+          return Object.assign({}, p, { articleName: art ? art.name : null });
+        });
+        InventoryUI.renderZoneCalendar(zonePlans);
+      } catch (e) {
+        console.warn('No se pudieron cargar planes de acción de la zona:', e);
+      }
+
       InventoryUI.renderArticlesList(
         zone.articles,
         AppState.currentFilter,
@@ -149,6 +148,17 @@ document.addEventListener('DOMContentLoaded', () => {
           onDeleteArticle:      (article)                => confirmDeleteArticle(article)
         }
       );
+      // Inyectar planes en tarjetas de artículo
+      try {
+        let zonePlans = await InventoryStorage.getActionPlansForZone(AppState.activeZoneId);
+        zonePlans = zonePlans.map(p => {
+          const art = (zone.articles || []).find(a => a.id === p.articleId);
+          return Object.assign({}, p, { articleName: art ? art.name : null });
+        });
+        InventoryUI.injectArticlePlans(zonePlans);
+      } catch (e) {
+        // ignore
+      }
     } catch (err) {
       console.error('[App] Error refrescando detalle de zona:', err);
       InventoryUI.showToast('Error al cargar artículos: ' + err.message, 'error');
@@ -405,7 +415,30 @@ document.addEventListener('DOMContentLoaded', () => {
             };
 
             try {
-              await InventoryStorage.saveArticle(AppState.activeZoneId, articleData);
+              const saved = await InventoryStorage.saveArticle(AppState.activeZoneId, articleData);
+
+              // Persistir planes de acción asociados (modalPlans)
+              if (window._modalActionPlans && Array.isArray(window._modalActionPlans)) {
+                console.log('[App] Guardando modalActionPlans count=', window._modalActionPlans.length);
+                for (const p of window._modalActionPlans) {
+                  console.log('[App] plan ->', p);
+                  if (p.id) {
+                    // existente -> actualizar
+                    await InventoryStorage.updateActionPlan(AppState.activeZoneId, saved.id, p);
+                  } else {
+                    // nuevo -> guardar
+                    const savedPlan = await InventoryStorage.saveActionPlan(AppState.activeZoneId, saved.id, {
+                      description: p.description,
+                      startDate: p.startDate,
+                      endDate: p.endDate
+                    });
+                    console.log('[App] savedPlan', savedPlan);
+                  }
+                }
+              } else {
+                console.log('[App] No hay modalActionPlans para guardar');
+              }
+
               InventoryUI.showToast(isEdit ? 'Artículo actualizado.' : 'Artículo agregado a la zona.', 'success');
               modal.closeModal();
               await refreshZoneDetailView();
@@ -449,6 +482,140 @@ document.addEventListener('DOMContentLoaded', () => {
         InventoryUI.showToast('Fotografía removida.', 'info');
       });
     }
+
+    // --- Planes de Acción: UI mínima dentro del modal ---
+    (function setupActionPlans() {
+      // Crear área debajo del formulario
+      const modalBody = document.querySelector('#modal-container .modal-body');
+      if (!modalBody) return;
+
+      const apSection = document.createElement('div');
+      apSection.className = 'ap-section';
+      apSection.innerHTML = `
+        <h4>Planes de Acción</h4>
+        <div class="ap-inputs">
+          <input type="text" id="ap-desc" placeholder="Descripción del plan" class="input-field" />
+          <input type="date" id="ap-start" class="input-field" />
+          <input type="date" id="ap-end" class="input-field" />
+          <button id="btn-add-action-plan" class="btn btn-sm btn-primary">Añadir Plan</button>
+        </div>
+        <div id="ap-list" class="ap-list"></div>
+      `;
+      modalBody.appendChild(apSection);
+
+      // Modal-scoped plans storage
+      window._modalActionPlans = [];
+
+      const apDesc = document.getElementById('ap-desc');
+      const apStart = document.getElementById('ap-start');
+      const apEnd = document.getElementById('ap-end');
+      const btnAdd = document.getElementById('btn-add-action-plan');
+      const apList = document.getElementById('ap-list');
+
+      function renderApList() {
+        apList.innerHTML = '';
+        console.log('[App] renderApList count=', window._modalActionPlans ? window._modalActionPlans.length : 0, window._modalActionPlans);
+        window._modalActionPlans.forEach((p, idx) => {
+          const item = document.createElement('div');
+          item.className = 'ap-item';
+
+          const descInput = document.createElement('textarea');
+          descInput.className = 'input-field ap-desc-input';
+          descInput.rows = 2;
+          descInput.value = p.description || '';
+          descInput.addEventListener('input', (e) => { window._modalActionPlans[idx].description = e.target.value; });
+
+          const startInput = document.createElement('input');
+          startInput.type = 'date';
+          startInput.className = 'input-field ap-date-input';
+          startInput.value = p.startDate || '';
+          startInput.addEventListener('change', (e) => { window._modalActionPlans[idx].startDate = e.target.value; });
+
+          const endInput = document.createElement('input');
+          endInput.type = 'date';
+          endInput.className = 'input-field ap-date-input';
+          endInput.value = p.endDate || '';
+          endInput.addEventListener('change', (e) => { window._modalActionPlans[idx].endDate = e.target.value; });
+
+          const meta = document.createElement('div');
+          meta.className = 'ap-item-meta';
+          meta.innerHTML = `<div class="ap-item-id">${p.id ? 'ID: ' + escapeHTML(p.id) : 'Nuevo'}</div>`;
+
+          const actions = document.createElement('div');
+          actions.className = 'ap-item-actions';
+          const delBtn = document.createElement('button');
+          delBtn.className = 'btn btn-sm btn-outlined btn-ap-delete';
+          delBtn.textContent = 'Eliminar';
+          delBtn.dataset.idx = idx;
+          actions.appendChild(delBtn);
+
+          item.appendChild(meta);
+          item.appendChild(descInput);
+          const datesRow = document.createElement('div');
+          datesRow.className = 'ap-dates-row';
+          datesRow.appendChild(startInput);
+          datesRow.appendChild(endInput);
+          item.appendChild(datesRow);
+          item.appendChild(actions);
+
+          apList.appendChild(item);
+        });
+      }
+
+      // Si estamos editando, cargar existentes (ahora que renderApList está definido)
+      (async () => {
+        if (isEdit && articleToEdit && articleToEdit.id) {
+          try {
+            console.log('[App] cargando AP para artículo', articleToEdit.id, 'zona', AppState.activeZoneId);
+            const existing = await InventoryStorage.getActionPlansForArticle(AppState.activeZoneId, articleToEdit.id);
+            console.log('[App] getActionPlansForArticle ->', existing);
+            if (existing && existing.length) {
+              window._modalActionPlans = existing.map(p => Object.assign({}, p));
+              console.log('[App] window._modalActionPlans set ->', window._modalActionPlans);
+              renderApList();
+            } else {
+              console.log('[App] no hay AP para este artículo');
+            }
+          } catch (e) { console.warn('No se pudieron cargar AP del artículo:', e); }
+        }
+      })();
+
+      btnAdd.addEventListener('click', () => {
+        const desc = apDesc.value.trim();
+        const s = apStart.value;
+        const e = apEnd.value;
+        if (!desc || !s || !e) {
+          InventoryUI.showToast('Complete descripción, fecha inicio y fin.', 'warning');
+          return;
+        }
+        const newPlan = { description: desc, startDate: s, endDate: e };
+        window._modalActionPlans.push(newPlan);
+        apDesc.value = '';
+        apStart.value = '';
+        apEnd.value = '';
+        renderApList();
+      });
+
+      apList.addEventListener('click', async (e) => {
+        const del = e.target.closest('.btn-ap-delete');
+        if (!del) return;
+        const idx = parseInt(del.dataset.idx, 10);
+        const plan = window._modalActionPlans[idx];
+        if (!plan) return;
+        // Si plan tiene id -> borrar persistente
+        if (plan.id) {
+          try {
+            await InventoryStorage.deleteActionPlan(AppState.activeZoneId, articleToEdit.id, plan.id);
+            InventoryUI.showToast('Plan eliminado.', 'info');
+          } catch (err) {
+            InventoryUI.showToast('Error al eliminar plan: ' + err.message, 'error');
+            return;
+          }
+        }
+        window._modalActionPlans.splice(idx, 1);
+        renderApList();
+      });
+    })();
   }
 
   // ─── Verificación ─────────────────────────────────────────────────────────────
@@ -580,12 +747,11 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
-    InventoryUI.elements.btnGlobalExport.addEventListener('click', exportAll);
+    InventoryUI.elements.btnGlobalExport?.addEventListener('click', exportAll);
     InventoryUI.elements.btnBackupExport?.addEventListener('click', exportAll);
-    InventoryUI.elements.btnFileSave?.addEventListener('click', exportAll);
 
     // Importar JSON
-    InventoryUI.elements.btnGlobalImport.addEventListener('click', triggerImport);
+    InventoryUI.elements.btnGlobalImport?.addEventListener('click', triggerImport);
     InventoryUI.elements.btnBackupImport?.addEventListener('click', triggerImport);
   }
 
@@ -624,5 +790,48 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ─── Arranque ────────────────────────────────────────────────────────────────
+  // Handlers para eventos provenientes del calendario completo / zona
+  window.addEventListener('fullCalendar:openArticle', async (ev) => {
+    const { articleId } = ev.detail || {};
+    if (!articleId || !AppState.activeZoneId) return;
+    try {
+      const zone = await InventoryStorage.getZoneById(AppState.activeZoneId);
+      if (!zone) return;
+      const article = zone.articles.find(a => a.id === articleId);
+      if (!article) {
+        InventoryUI.showToast('No se encontró el artículo asociado al plan.', 'warning');
+        return;
+      }
+      openArticleModal(article);
+    } catch (err) {
+      console.error('[App] fullCalendar:openArticle error', err);
+    }
+  });
+
+  window.addEventListener('fullCalendar:deletePlan', async (ev) => {
+    const { articleId, planId } = ev.detail || {};
+    if (!articleId || !planId || !AppState.activeZoneId) return;
+    InventoryUI.showConfirmDialog('Eliminar Plan', '¿Eliminar este plan de acción?', async () => {
+      try {
+        await InventoryStorage.deleteActionPlan(AppState.activeZoneId, articleId, planId);
+        InventoryUI.showToast('Plan eliminado.', 'info');
+        await refreshZoneDetailView();
+      } catch (err) {
+        InventoryUI.showToast('Error al eliminar plan: ' + err.message, 'error');
+      }
+    }, 'Eliminar');
+  });
+
+  // Also handle small zone list clicks
+  window.addEventListener('zoneCalendar:openArticle', async (ev) => {
+    const { articleId } = ev.detail || {};
+    if (!articleId || !AppState.activeZoneId) return;
+    try {
+      const zone = await InventoryStorage.getZoneById(AppState.activeZoneId);
+      const article = zone.articles.find(a => a.id === articleId);
+      if (article) openArticleModal(article);
+    } catch (err) { console.error(err); }
+  });
+
   init();
 });

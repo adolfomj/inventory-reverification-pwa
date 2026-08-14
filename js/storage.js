@@ -472,8 +472,7 @@ const InventoryStorage = (() => {
   }
 
   // ---------------------------------------------------------------------------
-  // Novedades (novelties) — almacenadas en localStorage por ahora
-  // ya que el esquema Supabase actual no las incluye
+  // Novedades (novelties) — Conectadas a Supabase (con fallback local)
   // ---------------------------------------------------------------------------
   const NOVELTY_KEY = 'inventory_novelties_v1';
 
@@ -485,7 +484,62 @@ const InventoryStorage = (() => {
     localStorage.setItem(NOVELTY_KEY, JSON.stringify(data));
   }
 
-  function saveNovelty(zoneId, noveltyData) {
+  async function getNoveltiesForZone(zoneId) {
+    try {
+      const client = db();
+      const { data, error } = await client
+        .from('novelties')
+        .select('*')
+        .eq('zone_id', zoneId)
+        .order('created_at', { ascending: true });
+      if (!error && data) {
+        return data.map(n => ({
+          id: n.id,
+          text: n.text,
+          confirmed: n.confirmed,
+          confirmedAt: n.confirmed_at,
+          createdAt: n.created_at
+        }));
+      }
+    } catch (e) {
+      console.warn('[Storage] Supabase novelties fallback to local:', e);
+    }
+    const all = _readNovelties();
+    return all[zoneId] || [];
+  }
+
+  async function saveNovelty(zoneId, noveltyData) {
+    try {
+      const client = db();
+      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(noveltyData.id || '');
+      const payload = {
+        zone_id: zoneId,
+        text: noveltyData.text || '',
+        confirmed: Boolean(noveltyData.confirmed),
+        confirmed_at: noveltyData.confirmedAt || null,
+        updated_at: new Date().toISOString()
+      };
+      if (isUUID) {
+        payload.id = noveltyData.id;
+      }
+      const { data, error } = await client
+        .from('novelties')
+        .upsert([payload])
+        .select()
+        .single();
+      if (!error && data) {
+        return {
+          id: data.id,
+          text: data.text,
+          confirmed: data.confirmed,
+          confirmedAt: data.confirmed_at,
+          createdAt: data.created_at
+        };
+      }
+    } catch (e) {
+      console.warn('[Storage] saveNovelty fallback to local:', e);
+    }
+
     const all = _readNovelties();
     if (!all[zoneId]) all[zoneId] = [];
     const idx = all[zoneId].findIndex(n => n.id === noveltyData.id);
@@ -495,26 +549,236 @@ const InventoryStorage = (() => {
       all[zoneId].push(InventoryData.createNovelty(noveltyData.text || ''));
     }
     _writeNovelties(all);
-    return Promise.resolve(noveltyData);
+    return noveltyData;
   }
 
-  function deleteNovelty(zoneId, noveltyId) {
+  async function deleteNovelty(zoneId, noveltyId) {
+    try {
+      const client = db();
+      const { error } = await client.from('novelties').delete().eq('id', noveltyId);
+      if (!error) return true;
+    } catch (e) {
+      console.warn('[Storage] deleteNovelty fallback to local:', e);
+    }
     const all = _readNovelties();
-    if (!all[zoneId]) return Promise.resolve(false);
+    if (!all[zoneId]) return false;
     all[zoneId] = all[zoneId].filter(n => n.id !== noveltyId);
     _writeNovelties(all);
-    return Promise.resolve(true);
+    return true;
   }
 
-  function toggleNoveltyConfirmation(zoneId, noveltyId, isConfirmed) {
+  async function toggleNoveltyConfirmation(zoneId, noveltyId, isConfirmed) {
+    try {
+      const client = db();
+      const confirmedAt = isConfirmed ? new Date().toISOString() : null;
+      const { data, error } = await client
+        .from('novelties')
+        .update({
+          confirmed: isConfirmed,
+          confirmed_at: confirmedAt,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', noveltyId)
+        .select()
+        .single();
+      if (!error && data) {
+        return {
+          id: data.id,
+          text: data.text,
+          confirmed: data.confirmed,
+          confirmedAt: data.confirmed_at,
+          createdAt: data.created_at
+        };
+      }
+    } catch (e) {
+      console.warn('[Storage] toggleNoveltyConfirmation fallback to local:', e);
+    }
     const all = _readNovelties();
-    if (!all[zoneId]) return Promise.resolve(null);
+    if (!all[zoneId]) return null;
     const nov = all[zoneId].find(n => n.id === noveltyId);
-    if (!nov) return Promise.resolve(null);
+    if (!nov) return null;
     nov.confirmed = isConfirmed;
     nov.confirmedAt = isConfirmed ? new Date().toISOString() : null;
     _writeNovelties(all);
-    return Promise.resolve(nov);
+    return nov;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Planes de Acción (action plans) — Conectados a Supabase (con fallback local)
+  // ---------------------------------------------------------------------------
+  const ACTION_PLAN_KEY = 'inventory_action_plans_v1';
+
+  function _readActionPlans() {
+    try { return JSON.parse(localStorage.getItem(ACTION_PLAN_KEY) || '{}'); }
+    catch { return {}; }
+  }
+
+  function _writeActionPlans(data) {
+    localStorage.setItem(ACTION_PLAN_KEY, JSON.stringify(data));
+  }
+
+  async function saveActionPlan(zoneId, articleId, plan) {
+    if (!zoneId || !articleId) throw new Error('zoneId and articleId required');
+    const normalizeDate = (d) => {
+      if (!d) return null;
+      try { return (new Date(d)).toISOString().slice(0, 10); } catch { return d; }
+    };
+
+    try {
+      const client = db();
+      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(plan.id || '');
+      const payload = {
+        zone_id: zoneId,
+        article_code: articleId,
+        description: plan.description || '',
+        start_date: normalizeDate(plan.startDate),
+        end_date: normalizeDate(plan.endDate),
+        updated_at: new Date().toISOString()
+      };
+      if (isUUID) {
+        payload.id = plan.id;
+      }
+      const { data, error } = await client
+        .from('action_plans')
+        .upsert([payload])
+        .select()
+        .single();
+      if (!error && data) {
+        return {
+          id: data.id,
+          articleId: data.article_code,
+          description: data.description,
+          startDate: data.start_date,
+          endDate: data.end_date,
+          createdAt: data.created_at
+        };
+      }
+    } catch (e) {
+      console.warn('[Storage] saveActionPlan fallback to local:', e);
+    }
+
+    const store = _readActionPlans();
+    store[zoneId] = store[zoneId] || {};
+    store[zoneId][articleId] = store[zoneId][articleId] || [];
+    const newPlan = Object.assign({ id: InventoryData.generateUniqueId(), createdAt: new Date().toISOString() }, plan || {});
+    newPlan.startDate = normalizeDate(newPlan.startDate) || '';
+    newPlan.endDate = normalizeDate(newPlan.endDate) || '';
+    store[zoneId][articleId].push(newPlan);
+    _writeActionPlans(store);
+    return newPlan;
+  }
+
+  async function getActionPlansForArticle(zoneId, articleId) {
+    try {
+      const client = db();
+      const { data, error } = await client
+        .from('action_plans')
+        .select('*')
+        .eq('zone_id', zoneId)
+        .eq('article_code', articleId)
+        .order('start_date', { ascending: true });
+      if (!error && data) {
+        return data.map(p => ({
+          id: p.id,
+          articleId: p.article_code,
+          description: p.description,
+          startDate: p.start_date,
+          endDate: p.end_date,
+          createdAt: p.created_at
+        }));
+      }
+    } catch (e) {
+      console.warn('[Storage] getActionPlansForArticle fallback:', e);
+    }
+    const store = _readActionPlans();
+    const arr = (store[zoneId] && store[zoneId][articleId]) ? store[zoneId][articleId].slice() : [];
+    arr.sort((a,b)=> new Date(a.startDate) - new Date(b.startDate));
+    return arr;
+  }
+
+  async function getActionPlansForZone(zoneId) {
+    try {
+      const client = db();
+      const { data, error } = await client
+        .from('action_plans')
+        .select('*')
+        .eq('zone_id', zoneId)
+        .order('start_date', { ascending: true });
+      if (!error && data) {
+        return data.map(p => ({
+          id: p.id,
+          articleId: p.article_code,
+          description: p.description,
+          startDate: p.start_date,
+          endDate: p.end_date,
+          createdAt: p.created_at
+        }));
+      }
+    } catch (e) {
+      console.warn('[Storage] getActionPlansForZone fallback:', e);
+    }
+    const store = _readActionPlans();
+    const out = [];
+    if (!store[zoneId]) return [];
+    Object.keys(store[zoneId]).forEach(articleId => {
+      (store[zoneId][articleId] || []).forEach(p => out.push(Object.assign({ articleId }, p)));
+    });
+    out.sort((a,b)=> new Date(a.startDate) - new Date(b.startDate));
+    return out;
+  }
+
+  async function updateActionPlan(zoneId, articleId, plan) {
+    const normalizeDate = (d) => { if (!d) return null; try { return (new Date(d)).toISOString().slice(0,10); } catch { return d; } };
+    try {
+      const client = db();
+      const { data, error } = await client
+        .from('action_plans')
+        .update({
+          description: plan.description || '',
+          start_date: normalizeDate(plan.startDate),
+          end_date: normalizeDate(plan.endDate),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', plan.id)
+        .select()
+        .single();
+      if (!error && data) {
+        return {
+          id: data.id,
+          articleId: data.article_code,
+          description: data.description,
+          startDate: data.start_date,
+          endDate: data.end_date,
+          createdAt: data.created_at
+        };
+      }
+    } catch (e) {
+      console.warn('[Storage] updateActionPlan fallback:', e);
+    }
+    const store = _readActionPlans();
+    if (!store[zoneId] || !store[zoneId][articleId]) return null;
+    const idx = store[zoneId][articleId].findIndex(p => p.id === plan.id);
+    if (idx === -1) return null;
+    plan.startDate = normalizeDate(plan.startDate) || '';
+    plan.endDate = normalizeDate(plan.endDate) || '';
+    store[zoneId][articleId][idx] = Object.assign({}, store[zoneId][articleId][idx], plan);
+    _writeActionPlans(store);
+    return store[zoneId][articleId][idx];
+  }
+
+  async function deleteActionPlan(zoneId, articleId, planId) {
+    try {
+      const client = db();
+      const { error } = await client.from('action_plans').delete().eq('id', planId);
+      if (!error) return true;
+    } catch (e) {
+      console.warn('[Storage] deleteActionPlan fallback:', e);
+    }
+    const store = _readActionPlans();
+    if (!store[zoneId] || !store[zoneId][articleId]) return false;
+    store[zoneId][articleId] = store[zoneId][articleId].filter(p => p.id !== planId);
+    _writeActionPlans(store);
+    return true;
   }
 
   // ---------------------------------------------------------------------------
@@ -549,7 +813,13 @@ const InventoryStorage = (() => {
     exportAllToJSON,
     importFromJSON,
     saveNovelty,
+    getNoveltiesForZone,
     deleteNovelty,
-    toggleNoveltyConfirmation
+    toggleNoveltyConfirmation,
+    saveActionPlan,
+    getActionPlansForArticle,
+    getActionPlansForZone,
+    updateActionPlan,
+    deleteActionPlan
   };
 })();
