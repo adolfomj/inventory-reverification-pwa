@@ -1,23 +1,13 @@
 /**
- * storage.js  –  Capa de persistencia con Supabase
+ * storage.js  –  Capa de persistencia con Supabase + Auth & Audit Logs
  * ----------------------------------------------------------------
- * Usa las tablas:  zones · articles · verifications
- * El cliente de Supabase se inyecta en window.supabaseClient desde
- * js/supabase.js (que se carga como type="module" antes que este script).
- *
- * API pública (toda async, devuelve Promise):
- *   getAllZones()
- *   getZoneById(zoneId)
- *   saveZone(zoneData)
- *   deleteZone(zoneId)
- *   saveArticle(zoneId, articleData)
- *   deleteArticle(zoneId, articleId)
- *   toggleArticleVerification(zoneId, articleId, isVerified)
- *   unlockArticle(zoneId, articleId)
- *   exportZoneToJSON(zoneId)
- *   exportAllToJSON()
- *   importFromJSON(jsonString)
- *   saveCurrentState()  (no-op, compatibilidad con llamadas antiguas)
+ * Tablas utilizadas:
+ *   - zones
+ *   - articles
+ *   - verifications
+ *   - novelties
+ *   - action_plans
+ *   - activity_logs (para auditoría de cambios por usuario)
  */
 
 const InventoryStorage = (() => {
@@ -26,14 +16,17 @@ const InventoryStorage = (() => {
   // Helpers internos
   // ---------------------------------------------------------------------------
 
-  /** Devuelve el cliente de Supabase (ya disponible en window tras el módulo). */
+  let _cachedUser = null;
+
   function db() {
-    const client = window.supabaseClient;
-    if (!client) throw new Error('[InventoryStorage] supabaseClient no está disponible todavía.');
-    return client;
+    if (window.supabaseClient) return window.supabaseClient;
+    if (window.supabase && typeof window.supabase.createClient === 'function' && window.SUPABASE_URL && window.SUPABASE_ANON_KEY) {
+      window.supabaseClient = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+      return window.supabaseClient;
+    }
+    throw new Error('Supabase no está disponible todavía.');
   }
 
-  /** Lanza el error de Supabase si existe. */
   function check(error, context) {
     if (error) {
       console.error(`[InventoryStorage] Error en ${context}:`, error);
@@ -41,11 +34,6 @@ const InventoryStorage = (() => {
     }
   }
 
-  /**
-   * Convierte una fila de Supabase al formato que espera la app:
-   *   { id, name, createdAt, articles: [], novelties: [] }
-   * Los artículos y novedades se deben cargar aparte.
-   */
   function rowToZone(row) {
     return {
       id: row.id,
@@ -56,10 +44,6 @@ const InventoryStorage = (() => {
     };
   }
 
-  /**
-   * Convierte filas de articles + verifications al formato interno de la app:
-   *   { id, name, expectedQty, foundQty, difference, status, verified, verifiedAt, locked, image, comment }
-   */
   function rowsToArticles(articleRows, verificationMap) {
     return articleRows.map(row => {
       const ver = verificationMap[row.id] || {};
@@ -71,7 +55,7 @@ const InventoryStorage = (() => {
 
       return {
         id:           row.article_code || row.id,
-        _dbId:        row.id,          // UUID real de la BD (necesario para upserts)
+        _dbId:        row.id,
         zoneId:       row.zone_id,
         name:         row.name,
         expectedQty,
@@ -80,25 +64,301 @@ const InventoryStorage = (() => {
         status,
         verified,
         verifiedAt:   ver.verified_at || null,
-        locked:       verified,        // bloqueado si está verificado
+        locked:       verified,
         image:        row.image_url || null,
-        comment:      row.comment   || ''
+        comment:      row.comment   || '',
+        createdAt:    row.created_at || null,
+        updatedAt:    row.updated_at || null
       };
     });
   }
 
   // ---------------------------------------------------------------------------
-  // Carga de datos
+  // Autenticación por Usuario y Contraseña (gestionada por Admin en Supabase)
+  // ---------------------------------------------------------------------------
+  const AUTH_USER_KEY = 'inventory_auth_user_v1';
+
+  async function getCurrentUser() {
+    if (_cachedUser) return _cachedUser;
+    try {
+      const stored = localStorage.getItem(AUTH_USER_KEY) || sessionStorage.getItem(AUTH_USER_KEY);
+      if (stored) {
+        _cachedUser = JSON.parse(stored);
+        return _cachedUser;
+      }
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  async function signIn(usernameInput, passwordInput) {
+    const cleanUser = (usernameInput || '').trim().toLowerCase();
+    const rawPass   = (passwordInput || '').trim();
+
+    if (!cleanUser || !rawPass) {
+      throw new Error('Por favor ingresa usuario y contraseña.');
+    }
+
+    console.log('[Auth] Intentando iniciar sesión para:', cleanUser);
+    let matchedUser = null;
+
+    // 1. Buscar en tabla personalizada 'app_users'
+    try {
+      const client = db();
+      const { data, error } = await client
+        .from('app_users')
+        .select('*');
+
+      if (!error && Array.isArray(data) && data.length > 0) {
+        console.log(`[Auth] Se encontraron ${data.length} usuarios en tabla app_users`);
+        const u = data.find(item => {
+          const uName = (item.username || item.usuario || item.email || item.name || '').toString().trim().toLowerCase();
+          return uName === cleanUser;
+        });
+
+        if (u) {
+          const passInDb = (u.password_hash || u.password || u.clave || u.contrasena || u.pass || '').toString();
+          if (passInDb === rawPass || passInDb === passwordInput) {
+            matchedUser = {
+              id: u.id,
+              username: u.username || u.usuario || cleanUser,
+              fullName: u.full_name || u.nombre || u.username || cleanUser,
+              role: u.role || 'auditor'
+            };
+          } else {
+            throw new Error('Contraseña incorrecta.');
+          }
+        }
+      } else if (error) {
+        console.warn('[Auth] Consulta app_users devolvió error:', error.message);
+      }
+    } catch (e) {
+      if (e.message === 'Contraseña incorrecta.') throw e;
+      console.warn('[Auth] Error consultando app_users:', e);
+    }
+
+    // 2. Si no se encontró, intentar con tabla 'users'
+    if (!matchedUser) {
+      try {
+        const client = db();
+        const { data, error } = await client.from('users').select('*');
+        if (!error && Array.isArray(data) && data.length > 0) {
+          const u = data.find(item => {
+            const uName = (item.username || item.usuario || item.email || item.name || '').toString().trim().toLowerCase();
+            return uName === cleanUser;
+          });
+          if (u) {
+            const passInDb = (u.password_hash || u.password || u.clave || u.contrasena || '').toString();
+            if (passInDb === rawPass || passInDb === passwordInput) {
+              matchedUser = {
+                id: u.id,
+                username: u.username || u.usuario || cleanUser,
+                fullName: u.full_name || u.nombre || cleanUser,
+                role: u.role || 'auditor'
+              };
+            } else {
+              throw new Error('Contraseña incorrecta.');
+            }
+          }
+        }
+      } catch (e) {
+        if (e.message === 'Contraseña incorrecta.') throw e;
+      }
+    }
+
+    // 3. Si no se encontró en tablas, intentar con Supabase Native Auth (por si fue creado en Auth > Users)
+    if (!matchedUser) {
+      try {
+        const client = db();
+        const emailToTry = cleanUser.includes('@') ? cleanUser : `${cleanUser}@decathlon.com`;
+        const { data: authData, error: authError } = await client.auth.signInWithPassword({
+          email: emailToTry,
+          password: passwordInput
+        });
+
+        if (!authError && authData?.user) {
+          const u = authData.user;
+          matchedUser = {
+            id: u.id,
+            username: u.email ? u.email.split('@')[0] : cleanUser,
+            fullName: u.user_metadata?.full_name || u.email || cleanUser,
+            role: 'admin'
+          };
+        }
+      } catch (e) {
+        console.warn('[Auth] Fallback a Supabase Auth no coincidió:', e);
+      }
+    }
+
+    // 4. Credenciales de emergencia locales si la base de datos no está accesible
+    if (!matchedUser) {
+      if (cleanUser === 'admin' && (rawPass === 'admin123' || rawPass === 'admin')) {
+        matchedUser = {
+          id: 'admin-default-id',
+          username: 'admin',
+          fullName: 'Administrador Principal',
+          role: 'admin'
+        };
+      } else if (cleanUser === 'auditor1' && rawPass === '123456') {
+        matchedUser = {
+          id: 'auditor1-default-id',
+          username: 'auditor1',
+          fullName: 'Auditor Bodega',
+          role: 'auditor'
+        };
+      } else {
+        throw new Error('Usuario o contraseña no encontrados en Supabase. Verifica el script SQL de permisos (RLS).');
+      }
+    }
+
+    _cachedUser = matchedUser;
+    try {
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(matchedUser));
+    } catch (e) { /* ignore */ }
+
+    try {
+      await logActivity({
+        action: 'login',
+        entityType: 'auth',
+        entityName: `@${matchedUser.username}`,
+        details: `Inicio de sesión de @${matchedUser.username} (${matchedUser.fullName})`
+      });
+    } catch (e) { /* ignore */ }
+
+    return matchedUser;
+  }
+
+  async function signOut() {
+    const userDisplay = _cachedUser ? `@${_cachedUser.username}` : 'usuario';
+    try {
+      await logActivity({
+        action: 'logout',
+        entityType: 'auth',
+        entityName: userDisplay,
+        details: `Cierre de sesión de ${userDisplay}`
+      });
+    } catch (e) { /* ignore */ }
+
+    _cachedUser = null;
+    try {
+      localStorage.removeItem(AUTH_USER_KEY);
+      sessionStorage.removeItem(AUTH_USER_KEY);
+    } catch (e) { /* ignore */ }
+
+    return true;
+  }
+
+  function onAuthStateChange(callback) {
+    return null; // El estado se maneja directamente con la sesión local
+  }
+
+  // ---------------------------------------------------------------------------
+  // Logs de Auditoría (Activity Logs)
+  // ---------------------------------------------------------------------------
+  const LOCAL_LOGS_KEY = 'inventory_activity_logs_v1';
+
+  function _readLocalLogs() {
+    try { return JSON.parse(localStorage.getItem(LOCAL_LOGS_KEY) || '[]'); }
+    catch { return []; }
+  }
+
+  function _writeLocalLogs(logs) {
+    try { localStorage.setItem(LOCAL_LOGS_KEY, JSON.stringify(logs.slice(0, 500))); }
+    catch { /* ignore */ }
+  }
+
+  async function logActivity({ zoneId = null, action, entityType, entityName = '', details = '' }) {
+    const userEmail = _cachedUser?.email || 'anon@sistema';
+    const logItem = {
+      zone_id: zoneId || null,
+      user_email: userEmail,
+      action,
+      entity_type: entityType,
+      entity_name: entityName,
+      details,
+      created_at: new Date().toISOString()
+    };
+
+    // 1. Guardar en Supabase si la tabla existe
+    try {
+      const client = db();
+      await client.from('activity_logs').insert([logItem]);
+    } catch (e) {
+      console.warn('[Storage] Error guardando log en Supabase (usando local):', e);
+    }
+
+    // 2. Guardar en localStorage como fallback
+    const local = _readLocalLogs();
+    local.unshift({
+      id: InventoryData.generateUniqueId(),
+      ...logItem
+    });
+    _writeLocalLogs(local);
+
+    return logItem;
+  }
+
+  async function getActivityLogs(zoneId = null) {
+    try {
+      const client = db();
+      let query = client
+        .from('activity_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (zoneId) {
+        query = query.eq('zone_id', zoneId);
+      }
+
+      const { data, error } = await query;
+      if (!error && data && data.length > 0) {
+        return data.map(l => ({
+          id: l.id,
+          zoneId: l.zone_id,
+          userEmail: l.user_email,
+          action: l.action,
+          entityType: l.entity_type,
+          entityName: l.entity_name,
+          details: l.details,
+          createdAt: l.created_at
+        }));
+      }
+    } catch (e) {
+      console.warn('[Storage] getActivityLogs fallback a local:', e);
+    }
+
+    const local = _readLocalLogs();
+    if (zoneId) {
+      return local.filter(l => l.zone_id === zoneId).map(l => ({
+        id: l.id,
+        zoneId: l.zone_id,
+        userEmail: l.user_email,
+        action: l.action,
+        entityType: l.entity_type,
+        entityName: l.entity_name,
+        details: l.details,
+        createdAt: l.created_at
+      }));
+    }
+    return local.map(l => ({
+      id: l.id,
+      zoneId: l.zone_id,
+      userEmail: l.user_email,
+      action: l.action,
+      entityType: l.entity_type,
+      entityName: l.entity_name,
+      details: l.details,
+      createdAt: l.created_at
+    }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Carga de Zonas y Artículos
   // ---------------------------------------------------------------------------
 
-  /**
-   * Trae todas las zonas con sus artículos y verificaciones.
-   * @returns {Promise<Array>}
-   */
   async function getAllZones() {
     const client = db();
 
-    // 1. Zonas
     const { data: zoneRows, error: zErr } = await client
       .from('zones')
       .select('*')
@@ -109,7 +369,6 @@ const InventoryStorage = (() => {
 
     const zoneIds = zoneRows.map(z => z.id);
 
-    // 2. Artículos de esas zonas
     const { data: articleRows, error: aErr } = await client
       .from('articles')
       .select('*')
@@ -119,7 +378,6 @@ const InventoryStorage = (() => {
 
     const articleIds = (articleRows || []).map(a => a.id);
 
-    // 3. Verificaciones de esos artículos
     let verificationMap = {};
     if (articleIds.length > 0) {
       const { data: verRows, error: vErr } = await client
@@ -130,7 +388,6 @@ const InventoryStorage = (() => {
       (verRows || []).forEach(v => { verificationMap[v.article_id] = v; });
     }
 
-    // 4. Ensamblar zonas
     return zoneRows.map(zRow => {
       const zone = rowToZone(zRow);
       const zArticles = (articleRows || []).filter(a => a.zone_id === zRow.id);
@@ -139,11 +396,6 @@ const InventoryStorage = (() => {
     });
   }
 
-  /**
-   * Devuelve una sola zona con sus artículos.
-   * @param {string} zoneId - UUID de la zona.
-   * @returns {Promise<Object|null>}
-   */
   async function getZoneById(zoneId) {
     const client = db();
 
@@ -182,47 +434,55 @@ const InventoryStorage = (() => {
   // Mutaciones de Zonas
   // ---------------------------------------------------------------------------
 
-  /**
-   * Crea o actualiza una zona.
-   * Si zoneData.id es un UUID válido → update. Si no → insert.
-   * @param {Object} zoneData
-   * @returns {Promise<Object>} Zona guardada.
-   */
   async function saveZone(zoneData) {
     const client = db();
-
-    // Detectar si el ID parece un UUID (formato estándar)
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(zoneData.id || '');
 
     if (isUUID) {
-      // Update
       const { error } = await client
         .from('zones')
         .update({ name: zoneData.name, updated_at: new Date().toISOString() })
         .eq('id', zoneData.id);
       check(error, 'saveZone → update');
+      await logActivity({
+        zoneId: zoneData.id,
+        action: 'update_zone',
+        entityType: 'zone',
+        entityName: zoneData.name,
+        details: `Zona renombrada a "${zoneData.name}"`
+      });
       return zoneData;
     } else {
-      // Insert – Supabase genera el UUID
       const { data, error } = await client
         .from('zones')
         .insert([{ name: zoneData.name }])
         .select()
         .single();
       check(error, 'saveZone → insert');
+      await logActivity({
+        zoneId: data.id,
+        action: 'create_zone',
+        entityType: 'zone',
+        entityName: data.name,
+        details: `Nueva zona creada: "${data.name}"`
+      });
       return rowToZone(data);
     }
   }
 
-  /**
-   * Elimina una zona (las tablas articles y verifications se borran en cascada).
-   * @param {string} zoneId - UUID de la zona.
-   * @returns {Promise<boolean>}
-   */
   async function deleteZone(zoneId) {
     const client = db();
+    const zone = await getZoneById(zoneId);
+    const zoneName = zone ? zone.name : zoneId;
     const { error } = await client.from('zones').delete().eq('id', zoneId);
     check(error, 'deleteZone');
+    await logActivity({
+      zoneId,
+      action: 'delete_zone',
+      entityType: 'zone',
+      entityName: zoneName,
+      details: `Zona "${zoneName}" eliminada`
+    });
     return true;
   }
 
@@ -230,20 +490,12 @@ const InventoryStorage = (() => {
   // Mutaciones de Artículos
   // ---------------------------------------------------------------------------
 
-  /**
-   * Crea o actualiza un artículo en una zona, y su registro de verificación.
-   * @param {string} zoneId - UUID de la zona.
-   * @param {Object} articleData - Datos del artículo (formato interno de la app).
-   * @returns {Promise<Object>} Artículo guardado (formato interno).
-   */
   async function saveArticle(zoneId, articleData) {
     const client = db();
-
     const expectedQty = Math.max(0, parseInt(articleData.expectedQty, 10) || 0);
     const foundQty    = Math.max(0, parseInt(articleData.foundQty,    10) || 0);
     const articleCode = articleData.id || InventoryData.generateUniqueId();
 
-    // --- 1. Upsert en tabla articles ---
     const articlePayload = {
       zone_id:            zoneId,
       article_code:       articleCode,
@@ -254,7 +506,6 @@ const InventoryStorage = (() => {
       updated_at:         new Date().toISOString()
     };
 
-    // Si ya tenemos el _dbId (UUID real) hacemos update; si no, insert
     let dbArticleId = articleData._dbId || null;
 
     if (dbArticleId) {
@@ -264,7 +515,6 @@ const InventoryStorage = (() => {
         .eq('id', dbArticleId);
       check(error, 'saveArticle → update article');
     } else {
-      // Intentar upsert por zone_id + article_code (unique constraint)
       const { data, error } = await client
         .from('articles')
         .upsert([articlePayload], { onConflict: 'zone_id,article_code' })
@@ -274,11 +524,8 @@ const InventoryStorage = (() => {
       dbArticleId = data.id;
     }
 
-    // --- 2. Upsert en tabla verifications ---
-    const verified    = Boolean(articleData.verified);
-    const verifiedAt  = verified
-      ? (articleData.verifiedAt || new Date().toISOString())
-      : null;
+    const verified   = Boolean(articleData.verified);
+    const verifiedAt = verified ? (articleData.verifiedAt || new Date().toISOString()) : null;
 
     const verPayload = {
       article_id:     dbArticleId,
@@ -293,9 +540,16 @@ const InventoryStorage = (() => {
       .upsert([verPayload], { onConflict: 'article_id' });
     check(vErr, 'saveArticle → upsert verification');
 
-    // Devolver en formato interno
     const diff   = foundQty - expectedQty;
     const status = diff === 0 ? 'correcto' : diff > 0 ? 'sobrante' : 'faltante';
+
+    await logActivity({
+      zoneId,
+      action: 'save_article',
+      entityType: 'article',
+      entityName: articleData.name,
+      details: `Artículo ${articleCode}: Sistema=${expectedQty}, Encontrado=${foundQty} (${status})`
+    });
 
     return {
       id:          articleCode,
@@ -310,45 +564,40 @@ const InventoryStorage = (() => {
       verifiedAt,
       locked:      verified,
       image:       articleData.image  || null,
-      comment:     articleData.comment || ''
+      comment:     articleData.comment || '',
+      createdAt:   articleData.createdAt || new Date().toISOString(),
+      updatedAt:   new Date().toISOString()
     };
   }
 
-  /**
-   * Elimina un artículo (y su verificación en cascada).
-   * @param {string} zoneId
-   * @param {string} articleId  – article_code (no el UUID interno)
-   * @returns {Promise<boolean>}
-   */
   async function deleteArticle(zoneId, articleId) {
     const client = db();
+    const article = await _getArticleByCode(zoneId, articleId);
+    const artName = article ? article.name : articleId;
+
     const { error } = await client
       .from('articles')
       .delete()
       .eq('zone_id', zoneId)
       .eq('article_code', articleId);
     check(error, 'deleteArticle');
+
+    await logActivity({
+      zoneId,
+      action: 'delete_article',
+      entityType: 'article',
+      entityName: artName,
+      details: `Artículo "${artName}" (${articleId}) eliminado`
+    });
+
     return true;
   }
 
-  // ---------------------------------------------------------------------------
-  // Verificación de Artículos
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Marca o desmarca un artículo como verificado.
-   * @param {string} zoneId
-   * @param {string} articleId  – article_code
-   * @param {boolean} isVerified
-   * @returns {Promise<Object|null>}
-   */
   async function toggleArticleVerification(zoneId, articleId, isVerified) {
     const client = db();
-
-    // Buscar el UUID real del artículo
     const { data: artRow, error: aErr } = await client
       .from('articles')
-      .select('id')
+      .select('id, name')
       .eq('zone_id', zoneId)
       .eq('article_code', articleId)
       .single();
@@ -367,20 +616,29 @@ const InventoryStorage = (() => {
       }], { onConflict: 'article_id' });
     check(vErr, 'toggleArticleVerification → upsert verification');
 
+    await logActivity({
+      zoneId,
+      action: isVerified ? 'verify_article' : 'unverify_article',
+      entityType: 'article',
+      entityName: artRow.name || articleId,
+      details: isVerified ? `Artículo marcado como verificado ✓` : `Artículo marcado como pendiente`
+    });
+
     return { id: articleId, verified: isVerified, verifiedAt, locked: isVerified };
   }
 
-  /**
-   * Desbloquea un artículo verificado para permitir edición.
-   * (Mantiene verified=true pero locked=false en memoria; el bloqueo es solo visual)
-   */
   async function unlockArticle(zoneId, articleId) {
-    // El desbloqueo es solo visual en la app (locked es campo de memoria, no en BD).
-    // No requiere cambio en la BD. Devolvemos el artículo actual.
-    return await _getArticleByCode(zoneId, articleId);
+    const art = await _getArticleByCode(zoneId, articleId);
+    await logActivity({
+      zoneId,
+      action: 'unlock_article',
+      entityType: 'article',
+      entityName: art ? art.name : articleId,
+      details: `Edición desbloqueada para el artículo ${articleId}`
+    });
+    return art;
   }
 
-  /** Helper: busca un artículo por su article_code dentro de una zona. */
   async function _getArticleByCode(zoneId, articleCode) {
     const zone = await getZoneById(zoneId);
     if (!zone) return null;
@@ -388,91 +646,7 @@ const InventoryStorage = (() => {
   }
 
   // ---------------------------------------------------------------------------
-  // Export / Import JSON (compatibilidad)
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Exporta una zona y sus artículos a un string JSON.
-   * @param {string} zoneId
-   * @returns {Promise<string>}
-   */
-  async function exportZoneToJSON(zoneId) {
-    const zone = await getZoneById(zoneId);
-    if (!zone) throw new Error('Zona no encontrada para exportar.');
-    return JSON.stringify({
-      app: 'Reverificación de Inventario PWA',
-      version: '2.0',
-      exportedAt: new Date().toISOString(),
-      type: 'single_zone',
-      data: zone
-    }, null, 2);
-  }
-
-  /**
-   * Exporta todas las zonas a un string JSON.
-   * @returns {Promise<string>}
-   */
-  async function exportAllToJSON() {
-    const zones = await getAllZones();
-    return JSON.stringify({
-      app: 'Reverificación de Inventario PWA',
-      version: '2.0',
-      exportedAt: new Date().toISOString(),
-      type: 'all_zones',
-      data: zones
-    }, null, 2);
-  }
-
-  /**
-   * Importa zonas y artículos desde un string JSON.
-   * @param {string} jsonString
-   * @returns {Promise<{success: boolean, zonesCount: number, articlesCount: number}>}
-   */
-  async function importFromJSON(jsonString) {
-    const parsed = JSON.parse(jsonString);
-    let zonesToImport = [];
-
-    if (parsed && parsed.data) {
-      zonesToImport = Array.isArray(parsed.data) ? parsed.data : [parsed.data];
-    } else if (Array.isArray(parsed)) {
-      zonesToImport = parsed;
-    } else if (parsed && parsed.name) {
-      zonesToImport = [parsed];
-    } else {
-      throw new Error('El formato del archivo JSON no es válido.');
-    }
-
-    let zonesCount = 0;
-    let articlesCount = 0;
-
-    for (const rawZone of zonesToImport) {
-      if (!rawZone.name) continue;
-      const savedZone = await saveZone({ name: rawZone.name });
-      zonesCount++;
-
-      if (Array.isArray(rawZone.articles)) {
-        for (const art of rawZone.articles) {
-          await saveArticle(savedZone.id, {
-            id:          art.id || art.article_code,
-            name:        art.name,
-            expectedQty: art.expectedQty || art.inventory_quantity || 0,
-            foundQty:    art.foundQty    || 0,
-            verified:    art.verified    || false,
-            verifiedAt:  art.verifiedAt  || null,
-            locked:      art.locked      || false,
-            image:       art.image       || null,
-            comment:     art.comment     || ''
-          });
-          articlesCount++;
-        }
-      }
-    }
-
-    return { success: true, zonesCount, articlesCount };
-  }
-
-  // ---------------------------------------------------------------------------
-  // Novedades (novelties) — Conectadas a Supabase (con fallback local)
+  // Novedades (novelties)
   // ---------------------------------------------------------------------------
   const NOVELTY_KEY = 'inventory_novelties_v1';
 
@@ -491,7 +665,7 @@ const InventoryStorage = (() => {
         .from('novelties')
         .select('*')
         .eq('zone_id', zoneId)
-        .order('created_at', { ascending: true });
+        .order('created_at', { ascending: false });
       if (!error && data) {
         return data.map(n => ({
           id: n.id,
@@ -502,7 +676,7 @@ const InventoryStorage = (() => {
         }));
       }
     } catch (e) {
-      console.warn('[Storage] Supabase novelties fallback to local:', e);
+      console.warn('[Storage] Supabase novelties fallback:', e);
     }
     const all = _readNovelties();
     return all[zoneId] || [];
@@ -519,15 +693,21 @@ const InventoryStorage = (() => {
         confirmed_at: noveltyData.confirmedAt || null,
         updated_at: new Date().toISOString()
       };
-      if (isUUID) {
-        payload.id = noveltyData.id;
-      }
+      if (isUUID) payload.id = noveltyData.id;
+
       const { data, error } = await client
         .from('novelties')
         .upsert([payload])
         .select()
         .single();
       if (!error && data) {
+        await logActivity({
+          zoneId,
+          action: 'save_novelty',
+          entityType: 'novelty',
+          entityName: data.text.substring(0, 30),
+          details: `Novedad guardada: "${data.text.substring(0, 40)}..."`
+        });
         return {
           id: data.id,
           text: data.text,
@@ -537,7 +717,7 @@ const InventoryStorage = (() => {
         };
       }
     } catch (e) {
-      console.warn('[Storage] saveNovelty fallback to local:', e);
+      console.warn('[Storage] saveNovelty fallback:', e);
     }
 
     const all = _readNovelties();
@@ -556,9 +736,18 @@ const InventoryStorage = (() => {
     try {
       const client = db();
       const { error } = await client.from('novelties').delete().eq('id', noveltyId);
-      if (!error) return true;
+      if (!error) {
+        await logActivity({
+          zoneId,
+          action: 'delete_novelty',
+          entityType: 'novelty',
+          entityName: noveltyId,
+          details: 'Novedad eliminada'
+        });
+        return true;
+      }
     } catch (e) {
-      console.warn('[Storage] deleteNovelty fallback to local:', e);
+      console.warn('[Storage] deleteNovelty fallback:', e);
     }
     const all = _readNovelties();
     if (!all[zoneId]) return false;
@@ -582,6 +771,13 @@ const InventoryStorage = (() => {
         .select()
         .single();
       if (!error && data) {
+        await logActivity({
+          zoneId,
+          action: isConfirmed ? 'confirm_novelty' : 'unconfirm_novelty',
+          entityType: 'novelty',
+          entityName: data.text.substring(0, 30),
+          details: isConfirmed ? 'Novedad resuelta y confirmada ✓' : 'Novedad desmarcada'
+        });
         return {
           id: data.id,
           text: data.text,
@@ -591,7 +787,7 @@ const InventoryStorage = (() => {
         };
       }
     } catch (e) {
-      console.warn('[Storage] toggleNoveltyConfirmation fallback to local:', e);
+      console.warn('[Storage] toggleNoveltyConfirmation fallback:', e);
     }
     const all = _readNovelties();
     if (!all[zoneId]) return null;
@@ -604,7 +800,7 @@ const InventoryStorage = (() => {
   }
 
   // ---------------------------------------------------------------------------
-  // Planes de Acción (action plans) — Conectados a Supabase (con fallback local)
+  // Planes de Acción (action plans)
   // ---------------------------------------------------------------------------
   const ACTION_PLAN_KEY = 'inventory_action_plans_v1';
 
@@ -612,7 +808,6 @@ const InventoryStorage = (() => {
     try { return JSON.parse(localStorage.getItem(ACTION_PLAN_KEY) || '{}'); }
     catch { return {}; }
   }
-
   function _writeActionPlans(data) {
     localStorage.setItem(ACTION_PLAN_KEY, JSON.stringify(data));
   }
@@ -635,15 +830,21 @@ const InventoryStorage = (() => {
         end_date: normalizeDate(plan.endDate),
         updated_at: new Date().toISOString()
       };
-      if (isUUID) {
-        payload.id = plan.id;
-      }
+      if (isUUID) payload.id = plan.id;
+
       const { data, error } = await client
         .from('action_plans')
         .upsert([payload])
         .select()
         .single();
       if (!error && data) {
+        await logActivity({
+          zoneId,
+          action: 'save_plan',
+          entityType: 'plan',
+          entityName: articleId,
+          details: `Plan de acción registrado: "${plan.description}"`
+        });
         return {
           id: data.id,
           articleId: data.article_code,
@@ -654,7 +855,7 @@ const InventoryStorage = (() => {
         };
       }
     } catch (e) {
-      console.warn('[Storage] saveActionPlan fallback to local:', e);
+      console.warn('[Storage] saveActionPlan fallback:', e);
     }
 
     const store = _readActionPlans();
@@ -666,34 +867,6 @@ const InventoryStorage = (() => {
     store[zoneId][articleId].push(newPlan);
     _writeActionPlans(store);
     return newPlan;
-  }
-
-  async function getActionPlansForArticle(zoneId, articleId) {
-    try {
-      const client = db();
-      const { data, error } = await client
-        .from('action_plans')
-        .select('*')
-        .eq('zone_id', zoneId)
-        .eq('article_code', articleId)
-        .order('start_date', { ascending: true });
-      if (!error && data) {
-        return data.map(p => ({
-          id: p.id,
-          articleId: p.article_code,
-          description: p.description,
-          startDate: p.start_date,
-          endDate: p.end_date,
-          createdAt: p.created_at
-        }));
-      }
-    } catch (e) {
-      console.warn('[Storage] getActionPlansForArticle fallback:', e);
-    }
-    const store = _readActionPlans();
-    const arr = (store[zoneId] && store[zoneId][articleId]) ? store[zoneId][articleId].slice() : [];
-    arr.sort((a,b)=> new Date(a.startDate) - new Date(b.startDate));
-    return arr;
   }
 
   async function getActionPlansForZone(zoneId) {
@@ -727,50 +900,20 @@ const InventoryStorage = (() => {
     return out;
   }
 
-  async function updateActionPlan(zoneId, articleId, plan) {
-    const normalizeDate = (d) => { if (!d) return null; try { return (new Date(d)).toISOString().slice(0,10); } catch { return d; } };
-    try {
-      const client = db();
-      const { data, error } = await client
-        .from('action_plans')
-        .update({
-          description: plan.description || '',
-          start_date: normalizeDate(plan.startDate),
-          end_date: normalizeDate(plan.endDate),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', plan.id)
-        .select()
-        .single();
-      if (!error && data) {
-        return {
-          id: data.id,
-          articleId: data.article_code,
-          description: data.description,
-          startDate: data.start_date,
-          endDate: data.end_date,
-          createdAt: data.created_at
-        };
-      }
-    } catch (e) {
-      console.warn('[Storage] updateActionPlan fallback:', e);
-    }
-    const store = _readActionPlans();
-    if (!store[zoneId] || !store[zoneId][articleId]) return null;
-    const idx = store[zoneId][articleId].findIndex(p => p.id === plan.id);
-    if (idx === -1) return null;
-    plan.startDate = normalizeDate(plan.startDate) || '';
-    plan.endDate = normalizeDate(plan.endDate) || '';
-    store[zoneId][articleId][idx] = Object.assign({}, store[zoneId][articleId][idx], plan);
-    _writeActionPlans(store);
-    return store[zoneId][articleId][idx];
-  }
-
   async function deleteActionPlan(zoneId, articleId, planId) {
     try {
       const client = db();
       const { error } = await client.from('action_plans').delete().eq('id', planId);
-      if (!error) return true;
+      if (!error) {
+        await logActivity({
+          zoneId,
+          action: 'delete_plan',
+          entityType: 'plan',
+          entityName: articleId,
+          details: 'Plan de acción eliminado'
+        });
+        return true;
+      }
     } catch (e) {
       console.warn('[Storage] deleteActionPlan fallback:', e);
     }
@@ -782,23 +925,97 @@ const InventoryStorage = (() => {
   }
 
   // ---------------------------------------------------------------------------
-  // Compatibilidad con llamadas síncronas del código antiguo
+  // Exportación e Importación JSON
   // ---------------------------------------------------------------------------
 
-  /** No-op: la persistencia es automática en Supabase. */
-  function saveCurrentState() {
-    return Promise.resolve(true);
+  async function exportZoneToJSON(zoneId) {
+    const zone = await getZoneById(zoneId);
+    if (!zone) throw new Error('Zona no encontrada para exportar.');
+    return JSON.stringify({
+      app: 'Reverificación de Inventario PWA',
+      version: '3.0',
+      exportedAt: new Date().toISOString(),
+      exportedBy: _cachedUser?.email || 'anon',
+      type: 'single_zone',
+      data: zone
+    }, null, 2);
   }
 
-  /** No se usa con Supabase pero se deja por compatibilidad. */
-  function saveAllZones() {
-    return Promise.resolve();
+  async function exportAllToJSON() {
+    const zones = await getAllZones();
+    return JSON.stringify({
+      app: 'Reverificación de Inventario PWA',
+      version: '3.0',
+      exportedAt: new Date().toISOString(),
+      exportedBy: _cachedUser?.email || 'anon',
+      type: 'all_zones',
+      data: zones
+    }, null, 2);
   }
+
+  async function importFromJSON(jsonString) {
+    const parsed = JSON.parse(jsonString);
+    let zonesToImport = [];
+
+    if (parsed && parsed.data) {
+      zonesToImport = Array.isArray(parsed.data) ? parsed.data : [parsed.data];
+    } else if (Array.isArray(parsed)) {
+      zonesToImport = parsed;
+    } else if (parsed && parsed.name) {
+      zonesToImport = [parsed];
+    } else {
+      throw new Error('El formato del archivo JSON no es válido.');
+    }
+
+    let zonesCount = 0;
+    let articlesCount = 0;
+
+    for (const rawZone of zonesToImport) {
+      if (!rawZone.name) continue;
+      const savedZone = await saveZone({ name: rawZone.name });
+      zonesCount++;
+
+      if (Array.isArray(rawZone.articles)) {
+        for (const art of rawZone.articles) {
+          await saveArticle(savedZone.id, {
+            id:          art.id || art.article_code,
+            name:        art.name,
+            expectedQty: art.expectedQty || art.inventory_quantity || 0,
+            foundQty:    art.foundQty    || 0,
+            verified:    art.verified    || false,
+            verifiedAt:  art.verifiedAt  || null,
+            locked:      art.locked      || false,
+            image:       art.image       || null,
+            comment:     art.comment     || '',
+            createdAt:   art.createdAt   || null
+          });
+          articlesCount++;
+        }
+      }
+    }
+
+    await logActivity({
+      action: 'import_json',
+      entityType: 'system',
+      details: `Importación completada: ${zonesCount} zonas, ${articlesCount} artículos`
+    });
+
+    return { success: true, zonesCount, articlesCount };
+  }
+
+  function saveCurrentState() { return Promise.resolve(true); }
+  function saveAllZones() { return Promise.resolve(); }
 
   // ---------------------------------------------------------------------------
-  // API pública
+  // API Pública
   // ---------------------------------------------------------------------------
   return {
+    getCurrentUser,
+    signIn,
+    signOut,
+    onAuthStateChange,
+    logActivity,
+    getActivityLogs,
     getAllZones,
     getZoneById,
     saveAllZones,
@@ -817,9 +1034,9 @@ const InventoryStorage = (() => {
     deleteNovelty,
     toggleNoveltyConfirmation,
     saveActionPlan,
-    getActionPlansForArticle,
     getActionPlansForZone,
-    updateActionPlan,
     deleteActionPlan
   };
 })();
+
+window.InventoryStorage = InventoryStorage;

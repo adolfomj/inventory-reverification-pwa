@@ -232,11 +232,110 @@ const InventoryData = (() => {
     });
   }
 
+  /**
+   * Devuelve un texto de tiempo relativo ("hace 5 min", "hace 2 horas", "hace 3 días").
+   * @param {string | Date} dateInput 
+   * @returns {string}
+   */
+  function getRelativeTime(dateInput) {
+    if (!dateInput) return '-';
+    const date = new Date(dateInput);
+    if (isNaN(date.getTime())) return '-';
+
+    const now = new Date();
+    const diffSecs = Math.floor((now - date) / 1000);
+
+    if (diffSecs < 45) return 'hace unos segundos';
+    if (diffSecs < 90) return 'hace 1 minuto';
+    const diffMins = Math.floor(diffSecs / 60);
+    if (diffMins < 60) return `hace ${diffMins} min`;
+
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours === 1) return 'hace 1 hora';
+    if (diffHours < 24) return `hace ${diffHours} horas`;
+
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays === 1) return 'ayer';
+    if (diffDays < 7) return `hace ${diffDays} días`;
+    if (diffDays < 30) return `hace ${Math.floor(diffDays / 7)} sem`;
+
+    return date.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' });
+  }
+
+  /**
+   * Obtiene la categoría de fecha amigable (Hoy, Ayer, Esta semana, etc.) con formato legible.
+   * @param {string | Date} dateInput 
+   * @returns {string} Categoría legible
+   */
+  function getDateCategory(dateInput) {
+    if (!dateInput) return 'Sin fecha registrada';
+    const date = new Date(dateInput);
+    if (isNaN(date.getTime())) return 'Sin fecha registrada';
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const itemDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const diffDays = Math.floor((today - itemDate) / (1000 * 60 * 60 * 24));
+
+    const dayName = date.toLocaleDateString('es-ES', { weekday: 'long' });
+    const capitalizedDay = dayName.charAt(0).toUpperCase() + dayName.slice(1);
+    const formattedShort = date.toLocaleDateString('es-ES', { day: 'numeric', month: 'long' });
+
+    if (diffDays === 0) return `Hoy — ${capitalizedDay}, ${formattedShort}`;
+    if (diffDays === 1) return `Ayer — ${capitalizedDay}, ${formattedShort}`;
+    if (diffDays > 1 && diffDays <= 7) return `Esta semana (${capitalizedDay} ${date.getDate()})`;
+    if (diffDays > 7 && diffDays <= 30) return `Este mes (${date.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })})`;
+
+    // Mes y año
+    return date.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+  }
+
+  /**
+   * Agrupa una lista de elementos por categoría de fecha (de más reciente a más antiguo).
+   * @param {Array} items - Lista de artículos, novedades o logs.
+   * @param {string | Function} dateAccessor - Nombre de propiedad o función para obtener la fecha.
+   * @returns {Array<{category: string, dateKey: string, items: Array}>} Grupos ordenados.
+   */
+  function groupItemsByDate(items = [], dateAccessor = 'createdAt') {
+    if (!Array.isArray(items) || items.length === 0) return [];
+
+    const getVal = (item) => {
+      if (typeof dateAccessor === 'function') return dateAccessor(item);
+      return item[dateAccessor] || item.verifiedAt || item.createdAt || null;
+    };
+
+    // Ordenar descendente (más nuevo primero)
+    const sorted = [...items].sort((a, b) => {
+      const da = new Date(getVal(a) || 0).getTime();
+      const db = new Date(getVal(b) || 0).getTime();
+      return db - da;
+    });
+
+    const groupsMap = new Map();
+
+    sorted.forEach(item => {
+      const rawDate = getVal(item);
+      const cat = getDateCategory(rawDate);
+      if (!groupsMap.has(cat)) {
+        groupsMap.set(cat, {
+          category: cat,
+          items: []
+        });
+      }
+      groupsMap.get(cat).items.push(item);
+    });
+
+    return Array.from(groupsMap.values());
+  }
+
   return {
     calculateDifference,
     determineStatus,
     generateUniqueId,
     formatDate,
+    getRelativeTime,
+    getDateCategory,
+    groupItemsByDate,
     createZone,
     createArticle,
     calculateZoneStats,
@@ -245,3 +344,5 @@ const InventoryData = (() => {
     createNovelty
   };
 })();
+
+window.InventoryData = InventoryData;

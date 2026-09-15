@@ -1,31 +1,127 @@
 /**
  * app.js
- * Controlador principal de la aplicación. Inicializa eventos, gestiona el estado
- * y coordina la comunicación entre InventoryStorage, InventoryData e InventoryUI.
- *
- * NOTA: InventoryStorage ahora usa Supabase (async). Todas las llamadas
- * a métodos de storage son await dentro de funciones async.
+ * Controlador principal de la aplicación con autenticación Supabase,
+ * registro de auditoría (logs) y separación por fechas.
  */
 
 document.addEventListener('DOMContentLoaded', () => {
 
   // ─── Estado global ───────────────────────────────────────────────────────────
   const AppState = {
+    currentUser: null,
+    isRegisterMode: false,
     activeZoneId: null,
     currentFilter: 'todos',
+    currentDateFilter: 'all',
+    currentSubView: 'articles',
     zoneSearchQuery: '',
     articleSearchQuery: '',
     theme: localStorage.getItem('theme_preference') || 'system'
   };
 
-  // ─── Init ────────────────────────────────────────────────────────────────────
-  async function init() {
+  // ─── Inicio del flujo de autenticación ───────────────────────────────────────
+  async function checkAuthAndStart() {
     initTheme();
+
+    try {
+      const user = await InventoryStorage.getCurrentUser();
+      if (user) {
+        AppState.currentUser = user;
+        InventoryUI.showAppShell(user);
+        await initApp();
+      } else {
+        InventoryUI.showAuthView();
+      }
+    } catch (e) {
+      console.warn('Error comprobando sesión inicial:', e);
+      InventoryUI.showAuthView();
+    }
+
+    bindAuthEvents();
+  }
+
+  // ─── Eventos de Autenticación ───────────────────────────────────────────────
+  function bindAuthEvents() {
+    const {
+      loginForm, loginUsername, loginPassword, loginError,
+      loginSubmit, loginSubmitText, btnLogout
+    } = InventoryUI.elements;
+
+    // Envío del formulario de Login con Usuario y Contraseña
+    loginForm?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      loginError?.classList.add('hidden');
+
+      const username = loginUsername?.value.trim();
+      const password = loginPassword?.value;
+
+      if (!username || !password) {
+        showAuthError('Por favor ingresa tu usuario y contraseña.');
+        return;
+      }
+
+      if (loginSubmit) loginSubmit.disabled = true;
+      if (loginSubmitText) loginSubmitText.textContent = 'Iniciando sesión...';
+
+      try {
+        const user = await InventoryStorage.signIn(username, password);
+        AppState.currentUser = user;
+        InventoryUI.showAppShell(user);
+        InventoryUI.showToast(`Bienvenido @${user.username}`, 'success');
+        loginForm.reset();
+
+        try {
+          await initApp();
+        } catch (initErr) {
+          console.warn('[App] Advertencia cargando datos:', initErr);
+        }
+      } catch (err) {
+        showAuthError(err.message || 'Error al iniciar sesión.');
+      } finally {
+        if (loginSubmit) loginSubmit.disabled = false;
+        if (loginSubmitText) loginSubmitText.textContent = 'Iniciar Sesión';
+      }
+    });
+
+    // Logout
+    btnLogout?.addEventListener('click', async () => {
+      try {
+        await InventoryStorage.signOut();
+        AppState.currentUser = null;
+        InventoryUI.showToast('Sesión cerrada.', 'info');
+        InventoryUI.showAuthView();
+      } catch (err) {
+        InventoryUI.showToast('Error al cerrar sesión: ' + err.message, 'error');
+      }
+    });
+  }
+
+  function showAuthError(msg) {
+    const { loginError } = InventoryUI.elements;
+    if (loginError) {
+      loginError.textContent = msg;
+      loginError.classList.remove('hidden');
+    }
+  }
+
+  // ─── Inicialización de la Aplicación (Autenticada) ───────────────────────────
+  let _appInitialized = false;
+  async function initApp() {
+    if (_appInitialized) {
+      await refreshZonesView();
+      await refreshSidebarLogs();
+      return;
+    }
+    _appInitialized = true;
+
     bindHeaderEvents();
     bindZoneViewEvents();
     bindZoneDetailEvents();
+    bindSubViewToggleEvents();
+    bindNoveltyEvents();
     bindImportExportEvents();
     await refreshZonesView();
+    await refreshSidebarLogs();
     registerServiceWorker();
   }
 
@@ -33,7 +129,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function initTheme() {
     applyTheme(AppState.theme);
 
-    InventoryUI.elements.themeToggleBtn.addEventListener('click', () => {
+    InventoryUI.elements.themeToggleBtn?.addEventListener('click', () => {
       const current = document.documentElement.getAttribute('data-theme');
       const nextTheme = current === 'dark' ? 'light' : 'dark';
       AppState.theme = nextTheme;
@@ -52,13 +148,13 @@ document.addEventListener('DOMContentLoaded', () => {
       effectiveTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     }
     document.documentElement.setAttribute('data-theme', effectiveTheme);
-    const iconSpan = InventoryUI.elements.themeToggleBtn.querySelector('.material-symbols-outlined');
+    const iconSpan = InventoryUI.elements.themeToggleBtn?.querySelector('.material-symbols-outlined');
     if (iconSpan) iconSpan.textContent = effectiveTheme === 'dark' ? 'light_mode' : 'dark_mode';
   }
 
   // ─── Header ──────────────────────────────────────────────────────────────────
   function bindHeaderEvents() {
-    InventoryUI.elements.btnBack.addEventListener('click', async () => {
+    InventoryUI.elements.btnBack?.addEventListener('click', async () => {
       AppState.activeZoneId = null;
       AppState.articleSearchQuery = '';
       if (InventoryUI.elements.articleSearchInput) {
@@ -66,6 +162,38 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       InventoryUI.showZonesView();
       await refreshZonesView();
+    });
+
+    InventoryUI.elements.btnRefreshSidebar?.addEventListener('click', async () => {
+      await refreshSidebarLogs();
+      InventoryUI.showToast('Actividad en vivo actualizada.', 'info');
+    });
+
+    InventoryUI.elements.btnToggleActivity?.addEventListener('click', () => {
+      InventoryUI.elements.activitySidebar?.classList.toggle('show-drawer');
+    });
+  }
+
+  // ─── Sub-Vistas (Artículos vs Novedades vs Logs) ──────────────────────────────
+  function bindSubViewToggleEvents() {
+    const { btnToggleArticles, btnToggleNovelties, btnToggleLogs } = InventoryUI.elements;
+
+    btnToggleArticles?.addEventListener('click', async () => {
+      AppState.currentSubView = 'articles';
+      InventoryUI.switchSubView('articles');
+      await refreshZoneDetailView();
+    });
+
+    btnToggleNovelties?.addEventListener('click', async () => {
+      AppState.currentSubView = 'novelties';
+      InventoryUI.switchSubView('novelties');
+      await refreshNoveltiesView();
+    });
+
+    btnToggleLogs?.addEventListener('click', async () => {
+      AppState.currentSubView = 'logs';
+      InventoryUI.switchSubView('logs');
+      await refreshLogsView();
     });
   }
 
@@ -77,6 +205,7 @@ document.addEventListener('DOMContentLoaded', () => {
         onSelectZone: (zoneId) => openZoneDetail(zoneId),
         onDeleteZone: (zone)   => confirmDeleteZone(zone)
       });
+      await refreshSidebarLogs();
     } catch (err) {
       console.error('[App] Error cargando zonas:', err);
       InventoryUI.showToast('Error al cargar zonas desde Supabase: ' + err.message, 'error');
@@ -93,14 +222,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
       AppState.activeZoneId = zoneId;
       AppState.currentFilter = 'todos';
+      AppState.currentDateFilter = 'all';
+      AppState.currentSubView = 'articles';
       AppState.articleSearchQuery = '';
 
       if (InventoryUI.elements.articleSearchInput) {
         InventoryUI.elements.articleSearchInput.value = '';
       }
 
-      InventoryUI.elements.filterTabs.forEach(tab => {
+      InventoryUI.elements.filterTabs?.forEach(tab => {
         tab.classList.toggle('active', tab.dataset.filter === 'todos');
+      });
+
+      InventoryUI.elements.dateFilterTabs?.forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.dateFilter === 'all');
       });
 
       InventoryUI.showZoneDetailView(zone);
@@ -123,22 +258,23 @@ document.addEventListener('DOMContentLoaded', () => {
       const stats = InventoryData.calculateZoneStats(zone.articles);
       InventoryUI.renderStats(stats);
 
-      // Renderizar calendario de la zona (planes de acción)
+      // Renderizar calendario de la zona
       try {
         let zonePlans = await InventoryStorage.getActionPlansForZone(AppState.activeZoneId);
-        // enriquecer con nombre de artículo si está disponible
         zonePlans = zonePlans.map(p => {
           const art = (zone.articles || []).find(a => a.id === p.articleId);
           return Object.assign({}, p, { articleName: art ? art.name : null });
         });
         InventoryUI.renderZoneCalendar(zonePlans);
       } catch (e) {
-        console.warn('No se pudieron cargar planes de acción de la zona:', e);
+        console.warn('No se pudieron cargar planes de acción:', e);
       }
 
+      // Renderizar lista de artículos agrupada por fechas con periodo
       InventoryUI.renderArticlesList(
         zone.articles,
         AppState.currentFilter,
+        AppState.currentDateFilter,
         AppState.articleSearchQuery,
         {
           onToggleVerification: (articleId, isVerified) => handleToggleVerification(articleId, isVerified),
@@ -148,34 +284,114 @@ document.addEventListener('DOMContentLoaded', () => {
           onDeleteArticle:      (article)                => confirmDeleteArticle(article)
         }
       );
-      // Inyectar planes en tarjetas de artículo
+
+      // Inyectar snippets de planes en tarjetas
       try {
         let zonePlans = await InventoryStorage.getActionPlansForZone(AppState.activeZoneId);
-        zonePlans = zonePlans.map(p => {
-          const art = (zone.articles || []).find(a => a.id === p.articleId);
-          return Object.assign({}, p, { articleName: art ? art.name : null });
-        });
         InventoryUI.injectArticlePlans(zonePlans);
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) { /* ignore */ }
+
+      await refreshSidebarLogs();
+
     } catch (err) {
       console.error('[App] Error refrescando detalle de zona:', err);
       InventoryUI.showToast('Error al cargar artículos: ' + err.message, 'error');
     }
   }
 
+  // ─── Novedades View ──────────────────────────────────────────────────────────
+  async function refreshNoveltiesView() {
+    if (!AppState.activeZoneId) return;
+    try {
+      const novelties = await InventoryStorage.getNoveltiesForZone(AppState.activeZoneId);
+      InventoryUI.renderNoveltiesList(novelties, {
+        onToggleNovelty: async (novId, isConfirmed) => {
+          try {
+            await InventoryStorage.toggleNoveltyConfirmation(AppState.activeZoneId, novId, isConfirmed);
+            InventoryUI.showToast(isConfirmed ? 'Novedad resuelta ✓' : 'Novedad marcada pendiente', 'info');
+            await refreshNoveltiesView();
+          } catch (e) {
+            InventoryUI.showToast('Error: ' + e.message, 'error');
+          }
+        },
+        onDeleteNovelty: async (novId) => {
+          InventoryUI.showConfirmDialog('Eliminar Novedad', '¿Deseas eliminar esta novedad?', async () => {
+            try {
+              await InventoryStorage.deleteNovelty(AppState.activeZoneId, novId);
+              InventoryUI.showToast('Novedad eliminada.', 'info');
+              await refreshNoveltiesView();
+            } catch (e) {
+              InventoryUI.showToast('Error: ' + e.message, 'error');
+            }
+          }, 'Eliminar');
+        }
+      });
+    } catch (e) {
+      console.error('[App] Error cargando novedades:', e);
+    }
+  }
+
+  function bindNoveltyEvents() {
+    InventoryUI.elements.fabAddNovelty?.addEventListener('click', () => {
+      if (!AppState.activeZoneId) return;
+      const modal = InventoryUI.showModal({
+        title: 'Nueva Novedad / Tarea',
+        contentHTML: `
+          <form id="form-novelty" class="form-vertical">
+            <div class="input-group">
+              <label for="novelty-text" class="input-label">Descripción de la novedad o tarea *</label>
+              <textarea id="novelty-text" class="input-field textarea-field" rows="3" placeholder="Ej: Mercancía pendiente de etiquetar en estante 4..." required autofocus></textarea>
+            </div>
+          </form>
+        `,
+        buttons: [
+          { text: 'Cancelar', class: 'btn-outlined', onClick: () => modal.closeModal() },
+          {
+            text: 'Guardar Novedad',
+            class: 'btn-primary',
+            onClick: async () => {
+              const textInput = document.getElementById('novelty-text');
+              const text = textInput ? textInput.value.trim() : '';
+              if (!text) {
+                InventoryUI.showToast('Ingresa la descripción de la novedad.', 'warning');
+                return;
+              }
+              try {
+                await InventoryStorage.saveNovelty(AppState.activeZoneId, { text });
+                InventoryUI.showToast('Novedad guardada correctamente.', 'success');
+                modal.closeModal();
+                await refreshNoveltiesView();
+              } catch (e) {
+                InventoryUI.showToast('Error al guardar novedad: ' + e.message, 'error');
+              }
+            }
+          }
+        ]
+      });
+    });
+  }
+
+  // ─── Logs / Historial View ───────────────────────────────────────────────────
+  async function refreshLogsView() {
+    if (!AppState.activeZoneId || AppState.currentUser?.role !== 'admin') return;
+    try {
+      const logs = await InventoryStorage.getActivityLogs(AppState.activeZoneId);
+      InventoryUI.renderActivityLogs(logs);
+    } catch (e) {
+      console.error('[App] Error cargando logs:', e);
+    }
+  }
+
   // ─── Eventos Vista de Zonas ───────────────────────────────────────────────────
   function bindZoneViewEvents() {
-    InventoryUI.elements.zoneSearchInput.addEventListener('input', async (e) => {
+    InventoryUI.elements.zoneSearchInput?.addEventListener('input', async (e) => {
       AppState.zoneSearchQuery = e.target.value;
       await refreshZonesView();
     });
 
-    InventoryUI.elements.fabAddZone.addEventListener('click', () => openZoneModal());
+    InventoryUI.elements.fabAddZone?.addEventListener('click', () => openZoneModal());
   }
 
-  // ─── Modal de Zona ────────────────────────────────────────────────────────────
   function openZoneModal(zoneToEdit = null) {
     const isEdit = Boolean(zoneToEdit);
     const contentHTML = `
@@ -199,20 +415,16 @@ document.addEventListener('DOMContentLoaded', () => {
       title: isEdit ? 'Editar Zona' : 'Nueva Zona de Responsabilidad',
       contentHTML,
       buttons: [
-        {
-          text: 'Cancelar',
-          class: 'btn-outlined',
-          onClick: () => modal.closeModal()
-        },
+        { text: 'Cancelar', class: 'btn-outlined', onClick: () => modal.closeModal() },
         {
           text: isEdit ? 'Guardar Cambios' : 'Crear Zona',
           class: 'btn-primary',
           onClick: async () => {
             const nameInput = document.getElementById('zone-name');
-            const name = nameInput.value.trim();
+            const name = nameInput ? nameInput.value.trim() : '';
             if (!name) {
               InventoryUI.showToast('Por favor ingrese el nombre de la zona.', 'warning');
-              nameInput.focus();
+              nameInput?.focus();
               return;
             }
             try {
@@ -254,12 +466,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ─── Eventos Vista de Detalle ─────────────────────────────────────────────────
   function bindZoneDetailEvents() {
-    InventoryUI.elements.articleSearchInput.addEventListener('input', async (e) => {
+    InventoryUI.elements.articleSearchInput?.addEventListener('input', async (e) => {
       AppState.articleSearchQuery = e.target.value;
       await refreshZoneDetailView();
     });
 
-    InventoryUI.elements.filterTabs.forEach(tab => {
+    InventoryUI.elements.filterTabs?.forEach(tab => {
       tab.addEventListener('click', async () => {
         InventoryUI.elements.filterTabs.forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
@@ -268,7 +480,27 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     });
 
-    InventoryUI.elements.fabAddArticle.addEventListener('click', () => openArticleModal());
+    InventoryUI.elements.dateFilterTabs?.forEach(tab => {
+      tab.addEventListener('click', async () => {
+        InventoryUI.elements.dateFilterTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        AppState.currentDateFilter = tab.dataset.dateFilter;
+        await refreshZoneDetailView();
+      });
+    });
+
+    InventoryUI.elements.fabAddArticle?.addEventListener('click', () => openArticleModal());
+  }
+
+  // ─── Sidebar de Actividad en Vivo ───────────────────────────────────────────
+  async function refreshSidebarLogs() {
+    if (AppState.currentUser?.role !== 'admin') return;
+    try {
+      const logs = await InventoryStorage.getActivityLogs();
+      InventoryUI.renderActivitySidebarFeed(logs);
+    } catch (e) {
+      console.warn('[App] Error actualizando feed lateral:', e);
+    }
   }
 
   // ─── Modal de Artículo ────────────────────────────────────────────────────────
@@ -373,11 +605,7 @@ document.addEventListener('DOMContentLoaded', () => {
       title: isEdit ? 'Editar Artículo' : 'Nuevo Artículo en Zona',
       contentHTML,
       buttons: [
-        {
-          text: 'Cancelar',
-          class: 'btn-outlined',
-          onClick: () => modal.closeModal()
-        },
+        { text: 'Cancelar', class: 'btn-outlined', onClick: () => modal.closeModal() },
         {
           text: isEdit ? 'Guardar Cambios' : 'Agregar Artículo',
           class: 'btn-primary',
@@ -389,15 +617,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const commentInput  = document.getElementById('art-comment');
             const verifiedChk   = document.getElementById('art-verified');
 
-            const name        = nameInput.value.trim();
-            const expectedQty = parseInt(expectedInput.value, 10) || 0;
-            const foundQty    = parseInt(foundInput.value, 10)    || 0;
+            const name        = nameInput?.value.trim();
+            const expectedQty = parseInt(expectedInput?.value, 10) || 0;
+            const foundQty    = parseInt(foundInput?.value, 10)    || 0;
             const comment     = commentInput ? commentInput.value.trim() : '';
             const id          = idInput ? idInput.value.trim() : null;
 
             if (!name) {
               InventoryUI.showToast('Debe ingresar el nombre del artículo.', 'warning');
-              nameInput.focus();
+              nameInput?.focus();
               return;
             }
 
@@ -411,34 +639,12 @@ document.addEventListener('DOMContentLoaded', () => {
               verified:   isEdit ? (verifiedChk ? verifiedChk.checked : articleToEdit.verified) : false,
               verifiedAt: isEdit ? articleToEdit.verifiedAt : null,
               locked:     isEdit ? articleToEdit.locked : false,
-              image:      currentImageDataUrl
+              image:      currentImageDataUrl,
+              createdAt:  isEdit ? articleToEdit.createdAt : new Date().toISOString()
             };
 
             try {
-              const saved = await InventoryStorage.saveArticle(AppState.activeZoneId, articleData);
-
-              // Persistir planes de acción asociados (modalPlans)
-              if (window._modalActionPlans && Array.isArray(window._modalActionPlans)) {
-                console.log('[App] Guardando modalActionPlans count=', window._modalActionPlans.length);
-                for (const p of window._modalActionPlans) {
-                  console.log('[App] plan ->', p);
-                  if (p.id) {
-                    // existente -> actualizar
-                    await InventoryStorage.updateActionPlan(AppState.activeZoneId, saved.id, p);
-                  } else {
-                    // nuevo -> guardar
-                    const savedPlan = await InventoryStorage.saveActionPlan(AppState.activeZoneId, saved.id, {
-                      description: p.description,
-                      startDate: p.startDate,
-                      endDate: p.endDate
-                    });
-                    console.log('[App] savedPlan', savedPlan);
-                  }
-                }
-              } else {
-                console.log('[App] No hay modalActionPlans para guardar');
-              }
-
+              await InventoryStorage.saveArticle(AppState.activeZoneId, articleData);
               InventoryUI.showToast(isEdit ? 'Artículo actualizado.' : 'Artículo agregado a la zona.', 'success');
               modal.closeModal();
               await refreshZoneDetailView();
@@ -450,7 +656,6 @@ document.addEventListener('DOMContentLoaded', () => {
       ]
     });
 
-    // Imagen
     const fileInput   = document.getElementById('art-image-input');
     const previewBox  = document.getElementById('art-image-preview');
     const previewImg  = document.getElementById('art-preview-img');
@@ -464,8 +669,8 @@ document.addEventListener('DOMContentLoaded', () => {
           InventoryUI.showToast('Procesando imagen...', 'info');
           const compressedDataUrl = await InventoryData.compressImage(file);
           currentImageDataUrl = compressedDataUrl;
-          previewImg.src = compressedDataUrl;
-          previewBox.classList.remove('hidden');
+          if (previewImg) previewImg.src = compressedDataUrl;
+          previewBox?.classList.remove('hidden');
           InventoryUI.showToast('Fotografía cargada correctamente.', 'success');
         } catch (err) {
           InventoryUI.showToast(err.message || 'Error al procesar la imagen.', 'error');
@@ -476,155 +681,21 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnRemoveImg) {
       btnRemoveImg.addEventListener('click', () => {
         currentImageDataUrl = null;
-        previewImg.src = '';
-        previewBox.classList.add('hidden');
+        if (previewImg) previewImg.src = '';
+        previewBox?.classList.add('hidden');
         if (fileInput) fileInput.value = '';
         InventoryUI.showToast('Fotografía removida.', 'info');
       });
     }
-
-    // --- Planes de Acción: UI mínima dentro del modal ---
-    (function setupActionPlans() {
-      // Crear área debajo del formulario
-      const modalBody = document.querySelector('#modal-container .modal-body');
-      if (!modalBody) return;
-
-      const apSection = document.createElement('div');
-      apSection.className = 'ap-section';
-      apSection.innerHTML = `
-        <h4>Planes de Acción</h4>
-        <div class="ap-inputs">
-          <input type="text" id="ap-desc" placeholder="Descripción del plan" class="input-field" />
-          <input type="date" id="ap-start" class="input-field" />
-          <input type="date" id="ap-end" class="input-field" />
-          <button id="btn-add-action-plan" class="btn btn-sm btn-primary">Añadir Plan</button>
-        </div>
-        <div id="ap-list" class="ap-list"></div>
-      `;
-      modalBody.appendChild(apSection);
-
-      // Modal-scoped plans storage
-      window._modalActionPlans = [];
-
-      const apDesc = document.getElementById('ap-desc');
-      const apStart = document.getElementById('ap-start');
-      const apEnd = document.getElementById('ap-end');
-      const btnAdd = document.getElementById('btn-add-action-plan');
-      const apList = document.getElementById('ap-list');
-
-      function renderApList() {
-        apList.innerHTML = '';
-        console.log('[App] renderApList count=', window._modalActionPlans ? window._modalActionPlans.length : 0, window._modalActionPlans);
-        window._modalActionPlans.forEach((p, idx) => {
-          const item = document.createElement('div');
-          item.className = 'ap-item';
-
-          const descInput = document.createElement('textarea');
-          descInput.className = 'input-field ap-desc-input';
-          descInput.rows = 2;
-          descInput.value = p.description || '';
-          descInput.addEventListener('input', (e) => { window._modalActionPlans[idx].description = e.target.value; });
-
-          const startInput = document.createElement('input');
-          startInput.type = 'date';
-          startInput.className = 'input-field ap-date-input';
-          startInput.value = p.startDate || '';
-          startInput.addEventListener('change', (e) => { window._modalActionPlans[idx].startDate = e.target.value; });
-
-          const endInput = document.createElement('input');
-          endInput.type = 'date';
-          endInput.className = 'input-field ap-date-input';
-          endInput.value = p.endDate || '';
-          endInput.addEventListener('change', (e) => { window._modalActionPlans[idx].endDate = e.target.value; });
-
-          const meta = document.createElement('div');
-          meta.className = 'ap-item-meta';
-          meta.innerHTML = `<div class="ap-item-id">${p.id ? 'ID: ' + escapeHTML(p.id) : 'Nuevo'}</div>`;
-
-          const actions = document.createElement('div');
-          actions.className = 'ap-item-actions';
-          const delBtn = document.createElement('button');
-          delBtn.className = 'btn btn-sm btn-outlined btn-ap-delete';
-          delBtn.textContent = 'Eliminar';
-          delBtn.dataset.idx = idx;
-          actions.appendChild(delBtn);
-
-          item.appendChild(meta);
-          item.appendChild(descInput);
-          const datesRow = document.createElement('div');
-          datesRow.className = 'ap-dates-row';
-          datesRow.appendChild(startInput);
-          datesRow.appendChild(endInput);
-          item.appendChild(datesRow);
-          item.appendChild(actions);
-
-          apList.appendChild(item);
-        });
-      }
-
-      // Si estamos editando, cargar existentes (ahora que renderApList está definido)
-      (async () => {
-        if (isEdit && articleToEdit && articleToEdit.id) {
-          try {
-            console.log('[App] cargando AP para artículo', articleToEdit.id, 'zona', AppState.activeZoneId);
-            const existing = await InventoryStorage.getActionPlansForArticle(AppState.activeZoneId, articleToEdit.id);
-            console.log('[App] getActionPlansForArticle ->', existing);
-            if (existing && existing.length) {
-              window._modalActionPlans = existing.map(p => Object.assign({}, p));
-              console.log('[App] window._modalActionPlans set ->', window._modalActionPlans);
-              renderApList();
-            } else {
-              console.log('[App] no hay AP para este artículo');
-            }
-          } catch (e) { console.warn('No se pudieron cargar AP del artículo:', e); }
-        }
-      })();
-
-      btnAdd.addEventListener('click', () => {
-        const desc = apDesc.value.trim();
-        const s = apStart.value;
-        const e = apEnd.value;
-        if (!desc || !s || !e) {
-          InventoryUI.showToast('Complete descripción, fecha inicio y fin.', 'warning');
-          return;
-        }
-        const newPlan = { description: desc, startDate: s, endDate: e };
-        window._modalActionPlans.push(newPlan);
-        apDesc.value = '';
-        apStart.value = '';
-        apEnd.value = '';
-        renderApList();
-      });
-
-      apList.addEventListener('click', async (e) => {
-        const del = e.target.closest('.btn-ap-delete');
-        if (!del) return;
-        const idx = parseInt(del.dataset.idx, 10);
-        const plan = window._modalActionPlans[idx];
-        if (!plan) return;
-        // Si plan tiene id -> borrar persistente
-        if (plan.id) {
-          try {
-            await InventoryStorage.deleteActionPlan(AppState.activeZoneId, articleToEdit.id, plan.id);
-            InventoryUI.showToast('Plan eliminado.', 'info');
-          } catch (err) {
-            InventoryUI.showToast('Error al eliminar plan: ' + err.message, 'error');
-            return;
-          }
-        }
-        window._modalActionPlans.splice(idx, 1);
-        renderApList();
-      });
-    })();
   }
 
-  // ─── Verificación ─────────────────────────────────────────────────────────────
+  // ─── Verificación de Artículos ───────────────────────────────────────────────
   async function handleToggleVerification(articleId, isVerified) {
     if (!AppState.activeZoneId) return;
     try {
       await InventoryStorage.toggleArticleVerification(AppState.activeZoneId, articleId, isVerified);
       InventoryUI.showToast(
-        isVerified ? 'Artículo verificado y bloqueado para edición.' : 'Artículo marcado como pendiente.',
+        isVerified ? 'Artículo verificado ✓' : 'Artículo marcado como pendiente',
         isVerified ? 'success' : 'info'
       );
       await refreshZoneDetailView();
@@ -658,11 +729,11 @@ document.addEventListener('DOMContentLoaded', () => {
   function handleUnlockArticle(article) {
     InventoryUI.showConfirmDialog(
       'Desbloquear edición',
-      `¿Desea desbloquear la edición del artículo "${article.name}" (${article.id})? Esto le permitirá realizar cambios a las cantidades.`,
+      `¿Desea desbloquear la edición del artículo "${article.name}" (${article.id})?`,
       async () => {
         try {
           await InventoryStorage.unlockArticle(AppState.activeZoneId, article.id);
-          InventoryUI.showToast('Edición desbloqueada. Ya puede modificar las cantidades.', 'info');
+          InventoryUI.showToast('Edición desbloqueada.', 'info');
           await refreshZoneDetailView();
         } catch (err) {
           InventoryUI.showToast('Error al desbloquear: ' + err.message, 'error');
@@ -720,11 +791,10 @@ document.addEventListener('DOMContentLoaded', () => {
       input.click();
     };
 
-    // Exportar Zona Activa
-    InventoryUI.elements.btnExportZone.addEventListener('click', async () => {
+    InventoryUI.elements.btnExportZone?.addEventListener('click', async () => {
       if (!AppState.activeZoneId) return;
       try {
-        const zone    = await InventoryStorage.getZoneById(AppState.activeZoneId);
+        const zone = await InventoryStorage.getZoneById(AppState.activeZoneId);
         if (!zone) return;
         const jsonStr  = await InventoryStorage.exportZoneToJSON(AppState.activeZoneId);
         const filename = `zona_${zone.name.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${Date.now()}.json`;
@@ -735,7 +805,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-    // Exportar Todo
     const exportAll = async () => {
       try {
         const jsonStr  = await InventoryStorage.exportAllToJSON();
@@ -749,13 +818,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     InventoryUI.elements.btnGlobalExport?.addEventListener('click', exportAll);
     InventoryUI.elements.btnBackupExport?.addEventListener('click', exportAll);
-
-    // Importar JSON
     InventoryUI.elements.btnGlobalImport?.addEventListener('click', triggerImport);
     InventoryUI.elements.btnBackupImport?.addEventListener('click', triggerImport);
   }
 
-  // ─── Helper descarga ──────────────────────────────────────────────────────────
   function downloadFile(content, fileName, contentType) {
     const a    = document.createElement('a');
     const file = new Blob([content], { type: contentType });
@@ -771,7 +837,6 @@ document.addEventListener('DOMContentLoaded', () => {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js')
           .then((reg) => {
-            console.log('Service Worker registrado con éxito:', reg.scope);
             if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
             reg.addEventListener('updatefound', () => {
               const newWorker = reg.installing;
@@ -784,13 +849,12 @@ document.addEventListener('DOMContentLoaded', () => {
               }
             });
           })
-          .catch((err) => console.error('Error al registrar Service Worker:', err));
+          .catch((err) => console.error('Error Service Worker:', err));
       });
     }
   }
 
-  // ─── Arranque ────────────────────────────────────────────────────────────────
-  // Handlers para eventos provenientes del calendario completo / zona
+  // ─── Calendario Custom Events ─────────────────────────────────────────────────
   window.addEventListener('fullCalendar:openArticle', async (ev) => {
     const { articleId } = ev.detail || {};
     if (!articleId || !AppState.activeZoneId) return;
@@ -798,11 +862,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const zone = await InventoryStorage.getZoneById(AppState.activeZoneId);
       if (!zone) return;
       const article = zone.articles.find(a => a.id === articleId);
-      if (!article) {
-        InventoryUI.showToast('No se encontró el artículo asociado al plan.', 'warning');
-        return;
-      }
-      openArticleModal(article);
+      if (article) openArticleModal(article);
     } catch (err) {
       console.error('[App] fullCalendar:openArticle error', err);
     }
@@ -822,16 +882,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 'Eliminar');
   });
 
-  // Also handle small zone list clicks
   window.addEventListener('zoneCalendar:openArticle', async (ev) => {
     const { articleId } = ev.detail || {};
     if (!articleId || !AppState.activeZoneId) return;
     try {
       const zone = await InventoryStorage.getZoneById(AppState.activeZoneId);
-      const article = zone.articles.find(a => a.id === articleId);
+      const article = zone?.articles.find(a => a.id === articleId);
       if (article) openArticleModal(article);
     } catch (err) { console.error(err); }
   });
 
-  init();
+  // ─── Arrancar Autenticación ──────────────────────────────────────────────────
+  checkAuthAndStart();
 });
