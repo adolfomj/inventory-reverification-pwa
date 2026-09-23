@@ -56,15 +56,35 @@ const InventoryData = (() => {
   }
 
   /**
+   * Determina si una fecha tiene más de 1 mes (30 días) de antigüedad.
+   * @param {string | Date} dateInput 
+   * @returns {boolean}
+   */
+  function isOlderThanOneMonth(dateInput) {
+    if (!dateInput) return false;
+    const date = new Date(dateInput);
+    if (isNaN(date.getTime())) return false;
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30);
+    return date < thirtyDaysAgo;
+  }
+
+  /**
    * Crea un nuevo objeto de Zona de Responsabilidad.
    * @param {string} name - Nombre de la zona.
+   * @param {Object} user - Usuario que crea la zona.
    * @returns {Object} Objeto de Zona.
    */
-  function createZone(name) {
+  function createZone(name, user = null) {
+    const userTag = user?.username ? `@${user.username}` : (user?.fullName || 'Sistema');
+    const now = new Date().toISOString();
     return {
       id: generateUniqueId(),
       name: name.trim(),
-      createdAt: new Date().toISOString(),
+      createdBy: userTag,
+      createdAt: now,
+      updatedBy: userTag,
+      updatedAt: now,
       articles: [],
       novelties: []
     };
@@ -73,15 +93,19 @@ const InventoryData = (() => {
   /**
    * Crea un objeto de Novedad/Tarea para una zona.
    * @param {string} text - Contenido del comentario o novedad.
+   * @param {Object} user - Usuario que registra la novedad.
    * @returns {Object}
    */
-  function createNovelty(text) {
+  function createNovelty(text, user = null) {
+    const userTag = user?.username ? `@${user.username}` : (user?.fullName || 'Sistema');
+    const now = new Date().toISOString();
     return {
       id: generateUniqueId(),
       text: text.trim(),
       confirmed: false,
       confirmedAt: null,
-      createdAt: new Date().toISOString()
+      createdBy: userTag,
+      createdAt: now
     };
   }
 
@@ -90,7 +114,22 @@ const InventoryData = (() => {
    * @param {Object} param0 
    * @returns {Object} Objeto de Artículo formateado.
    */
-  function createArticle({ id, name, expectedQty = 0, foundQty = 0, verified = false, verifiedAt = null, locked = false, image = null, comment = '' }) {
+  function createArticle({ 
+    id, 
+    name, 
+    expectedQty = 0, 
+    foundQty = 0, 
+    verified = false, 
+    verifiedAt = null, 
+    locked = false, 
+    image = null, 
+    comment = '',
+    user = null,
+    createdBy = null,
+    createdAt = null,
+    updatedBy = null,
+    updatedAt = null
+  }) {
     const parsedExpected = Math.max(0, parseInt(expectedQty, 10) || 0);
     const parsedFound = Math.max(0, parseInt(foundQty, 10) || 0);
     const diff = calculateDifference(parsedExpected, parsedFound);
@@ -105,6 +144,9 @@ const InventoryData = (() => {
       verificationTimestamp = null;
     }
 
+    const userTag = user?.username ? `@${user.username}` : (user?.fullName || 'Sistema');
+    const now = new Date().toISOString();
+
     return {
       id: (id && id.trim()) ? id.trim() : generateUniqueId(),
       name: name.trim(),
@@ -117,7 +159,11 @@ const InventoryData = (() => {
       // Si está verificado, por defecto queda bloqueado para evitar modificaciones accidentalmente
       locked: isVerified ? true : Boolean(locked),
       image: image || null,
-      comment: (comment && typeof comment === 'string') ? comment.trim() : ''
+      comment: (comment && typeof comment === 'string') ? comment.trim() : '',
+      createdBy: createdBy || userTag,
+      createdAt: createdAt || now,
+      updatedBy: updatedBy || userTag,
+      updatedAt: updatedAt || now
     };
   }
 
@@ -341,7 +387,8 @@ const InventoryData = (() => {
     calculateZoneStats,
     getSampleData,
     compressImage,
-    createNovelty
+    createNovelty,
+    isOlderThanOneMonth
   };
 })();
 

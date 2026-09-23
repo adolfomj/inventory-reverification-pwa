@@ -35,10 +35,16 @@ const InventoryStorage = (() => {
   }
 
   function rowToZone(row) {
+    const creator = row.created_by || row.user_name || '@admin';
+    const modifier = row.updated_by || row.created_by || '@admin';
     return {
       id: row.id,
       name: row.name,
-      createdAt: row.created_at,
+      createdBy: creator,
+      createdAt: row.created_at || new Date().toISOString(),
+      updatedBy: modifier,
+      updatedAt: row.updated_at || row.created_at || new Date().toISOString(),
+      hidden: Boolean(row.hidden),
       articles: [],
       novelties: []
     };
@@ -52,6 +58,9 @@ const InventoryStorage = (() => {
       const difference  = foundQty - expectedQty;
       const status      = difference === 0 ? 'correcto' : difference > 0 ? 'sobrante' : 'faltante';
       const verified    = Boolean(ver.verified);
+
+      const creator = row.created_by || '@admin';
+      const modifier = ver.verified_by || row.updated_by || (ver.verified ? '@auditor1' : creator);
 
       return {
         id:           row.article_code || row.id,
@@ -67,8 +76,10 @@ const InventoryStorage = (() => {
         locked:       verified,
         image:        row.image_url || null,
         comment:      row.comment   || '',
+        createdBy:    creator,
         createdAt:    row.created_at || null,
-        updatedAt:    row.updated_at || null
+        updatedBy:    modifier,
+        updatedAt:    ver.verified_at || row.updated_at || row.created_at || null
       };
     });
   }
@@ -267,10 +278,10 @@ const InventoryStorage = (() => {
   }
 
   async function logActivity({ zoneId = null, action, entityType, entityName = '', details = '' }) {
-    const userEmail = _cachedUser?.email || 'anon@sistema';
+    const userDisplay = _cachedUser?.username ? `@${_cachedUser.username}` : (_cachedUser?.fullName || _cachedUser?.email || '@admin');
     const logItem = {
       zone_id: zoneId || null,
-      user_email: userEmail,
+      user_email: userDisplay,
       action,
       entity_type: entityType,
       entity_name: entityName,
@@ -486,12 +497,35 @@ const InventoryStorage = (() => {
     return true;
   }
 
+  async function toggleZoneVisibility(zoneId, hide) {
+    const client = db();
+    const userTag = _cachedUser?.username ? `@${_cachedUser.username}` : (_cachedUser?.fullName || '@admin');
+
+    const { data, error } = await client
+      .from('zones')
+      .update({ hidden: hide, updated_at: new Date().toISOString() })
+      .eq('id', zoneId)
+      .select();
+    check(error, 'toggleZoneVisibility');
+
+    await logActivity({
+      zoneId,
+      action: hide ? 'hide_zone' : 'show_zone',
+      entityType: 'zone',
+      entityName: zoneId,
+      details: hide ? `Zona ocultada por ${userTag}` : `Zona visible nuevamente por ${userTag}`
+    });
+
+    return { id: zoneId, hidden: hide };
+  }
+
   // ---------------------------------------------------------------------------
   // Mutaciones de Artículos
   // ---------------------------------------------------------------------------
 
   async function saveArticle(zoneId, articleData) {
     const client = db();
+    const userTag = _cachedUser?.username ? `@${_cachedUser.username}` : (_cachedUser?.fullName || '@admin');
     const expectedQty = Math.max(0, parseInt(articleData.expectedQty, 10) || 0);
     const foundQty    = Math.max(0, parseInt(articleData.foundQty,    10) || 0);
     const articleCode = articleData.id || InventoryData.generateUniqueId();
@@ -503,6 +537,7 @@ const InventoryStorage = (() => {
       inventory_quantity: expectedQty,
       image_url:          articleData.image  || null,
       comment:            articleData.comment || '',
+      updated_by:         userTag,
       updated_at:         new Date().toISOString()
     };
 
@@ -515,9 +550,11 @@ const InventoryStorage = (() => {
         .eq('id', dbArticleId);
       check(error, 'saveArticle → update article');
     } else {
+      // Nuevo artículo: también incluir created_by
+      const insertPayload = { ...articlePayload, created_by: userTag };
       const { data, error } = await client
         .from('articles')
-        .upsert([articlePayload], { onConflict: 'zone_id,article_code' })
+        .upsert([insertPayload], { onConflict: 'zone_id,article_code' })
         .select()
         .single();
       check(error, 'saveArticle → upsert article');
@@ -532,6 +569,7 @@ const InventoryStorage = (() => {
       found_quantity: foundQty,
       verified,
       verified_at:    verifiedAt,
+      verified_by:    verified ? userTag : null,
       updated_at:     new Date().toISOString()
     };
 
@@ -605,6 +643,7 @@ const InventoryStorage = (() => {
     if (!artRow) return null;
 
     const verifiedAt = isVerified ? new Date().toISOString() : null;
+    const userTag = _cachedUser?.username ? `@${_cachedUser.username}` : (_cachedUser?.fullName || '@admin');
 
     const { error: vErr } = await client
       .from('verifications')
@@ -612,6 +651,7 @@ const InventoryStorage = (() => {
         article_id:  artRow.id,
         verified:    isVerified,
         verified_at: verifiedAt,
+        verified_by: isVerified ? userTag : null,
         updated_at:  new Date().toISOString()
       }], { onConflict: 'article_id' });
     check(vErr, 'toggleArticleVerification → upsert verification');
@@ -628,15 +668,35 @@ const InventoryStorage = (() => {
   }
 
   async function unlockArticle(zoneId, articleId) {
-    const art = await _getArticleByCode(zoneId, articleId);
+    const client = db();
+    // Buscar el artículo para obtener su _dbId
+    const { data: artRow, error: aErr } = await client
+      .from('articles')
+      .select('id, name')
+      .eq('zone_id', zoneId)
+      .eq('article_code', articleId)
+      .single();
+
+    if (!aErr && artRow) {
+      // Desbloquear: poner verified=false y verified_at=null en verifications
+      await client
+        .from('verifications')
+        .upsert([{
+          article_id: artRow.id,
+          verified: false,
+          verified_at: null,
+          updated_at: new Date().toISOString()
+        }], { onConflict: 'article_id' });
+    }
+
     await logActivity({
       zoneId,
       action: 'unlock_article',
       entityType: 'article',
-      entityName: art ? art.name : articleId,
+      entityName: artRow ? artRow.name : articleId,
       details: `Edición desbloqueada para el artículo ${articleId}`
     });
-    return art;
+    return artRow || null;
   }
 
   async function _getArticleByCode(zoneId, articleCode) {
@@ -1022,6 +1082,7 @@ const InventoryStorage = (() => {
     saveCurrentState,
     saveZone,
     deleteZone,
+    toggleZoneVisibility,
     saveArticle,
     deleteArticle,
     toggleArticleVerification,

@@ -92,7 +92,7 @@
         <button class="icon-btn" id="btn-global-import" title="Importar Archivo JSON">
           <span class="material-symbols-outlined">file_upload</span>
         </button>
-        <button class="icon-btn hidden" id="btn-toggle-activity" title="Ver Actividad Reciente">
+        <button class="icon-btn hidden" id="btn-toggle-activity" title="Ver Últimos Cambios">
           <span class="material-symbols-outlined">bolt</span>
         </button>
         <button class="icon-btn" id="theme-toggle-btn" title="Cambiar Tema">
@@ -133,6 +133,13 @@
               <span class="material-symbols-outlined search-icon">search</span>
               <input type="text" id="zone-search-input" class="input-field" placeholder="Buscar zona por nombre...">
             </div>
+          </div>
+
+          <!-- Filtros de Visibilidad de Zonas (Admin) -->
+          <div class="zones-filter-bar hidden" id="zones-admin-filters">
+            <button class="filter-tab active" data-zone-filter="all">Todas (<span id="count-all-zones">0</span>)</button>
+            <button class="filter-tab" data-zone-filter="visible">Activas (<span id="count-visible-zones">0</span>)</button>
+            <button class="filter-tab" data-zone-filter="hidden">Ocultas (<span id="count-hidden-zones">0</span>)</button>
           </div>
 
           <!-- Grid de Tarjetas de Zonas -->
@@ -185,28 +192,15 @@
               </div>
             </div>
 
-            <!-- Barra de Filtros Doble (Estado + Periodo de Fecha) -->
+            <!-- Barra de Filtros de Estado -->
             <div class="filters-container">
-              <div class="filter-group">
-                <span class="filter-label-chip">Estado:</span>
-                <nav class="filter-bar" id="filter-bar">
-                  <button class="filter-tab active" data-filter="todos">Todos</button>
-                  <button class="filter-tab" data-filter="pendientes">Pendientes</button>
-                  <button class="filter-tab" data-filter="verificados">Verificados</button>
-                  <button class="filter-tab" data-filter="faltantes">Faltantes</button>
-                  <button class="filter-tab" data-filter="sobrantes">Sobrantes</button>
-                </nav>
-              </div>
-              <div class="filter-group">
-                <span class="filter-label-chip">Periodo:</span>
-                <nav class="filter-bar filter-bar-date" id="date-filter-bar">
-                  <button class="date-tab active" data-date-filter="all">Todas las fechas</button>
-                  <button class="date-tab" data-date-filter="today">🌟 Hoy</button>
-                  <button class="date-tab" data-date-filter="yesterday">📅 Ayer</button>
-                  <button class="date-tab" data-date-filter="week">🗓️ Esta semana</button>
-                  <button class="date-tab" data-date-filter="older">📁 Anteriores</button>
-                </nav>
-              </div>
+              <nav class="filter-bar" id="filter-bar">
+                <button class="filter-tab active" data-filter="todos">Todos</button>
+                <button class="filter-tab" data-filter="pendientes">Pendientes</button>
+                <button class="filter-tab" data-filter="verificados">Verificados</button>
+                <button class="filter-tab" data-filter="faltantes">Faltantes</button>
+                <button class="filter-tab" data-filter="sobrantes">Sobrantes</button>
+              </nav>
             </div>
 
             <!-- Lista de Tarjetas de Artículos (Agrupada por Fechas con Timeline) -->
@@ -255,28 +249,34 @@
 
       </div>
 
-      <!-- COLUMNA LATERAL: LOG DE ACTIVIDAD RECIENTE (SIDEBAR) -->
-      <aside class="activity-sidebar surface-card hidden" id="activity-sidebar">
-        <div class="activity-sidebar-header">
-          <div class="sidebar-title-group">
-            <span class="material-symbols-outlined sidebar-icon pulse-icon">bolt</span>
-            <div class="sidebar-title-texts">
-              <h3>Actividad Reciente</h3>
-              <span class="sidebar-subtitle">Cambios y auditoría en vivo</span>
-            </div>
-          </div>
-          <button class="icon-btn btn-sm" id="btn-refresh-sidebar" title="Actualizar actividad">
-            <span class="material-symbols-outlined">refresh</span>
-          </button>
-        </div>
-
-        <div class="activity-sidebar-feed" id="activity-sidebar-feed">
-          <!-- Renderizado dinámico desde JS -->
-        </div>
-      </aside>
-
     </div>
   </main>
+
+  <!-- Desplegable de Últimos Cambios (Dropdown Popover) -->
+  <div class="activity-dropdown-backdrop hidden" id="activity-dropdown-backdrop"></div>
+  <aside class="activity-dropdown surface-card hidden" id="activity-sidebar" aria-label="Últimos Cambios">
+    <div class="activity-sidebar-header">
+      <div class="sidebar-title-group">
+        <span class="material-symbols-outlined sidebar-icon pulse-icon">bolt</span>
+        <div class="sidebar-title-texts">
+          <h3>Últimos Cambios</h3>
+          <span class="sidebar-subtitle">Historial de actividad en vivo</span>
+        </div>
+      </div>
+      <div class="sidebar-header-actions">
+        <button class="icon-btn btn-sm" id="btn-refresh-sidebar" title="Actualizar actividad">
+          <span class="material-symbols-outlined">refresh</span>
+        </button>
+        <button class="icon-btn btn-sm" id="btn-close-activity" title="Cerrar panel">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="activity-sidebar-feed" id="activity-sidebar-feed">
+      <!-- Renderizado dinámico desde JS -->
+    </div>
+  </aside>
 
   <!-- Contenedor de Modales y Diálogos -->
   <div id="modal-container" class="modal-container hidden"></div>

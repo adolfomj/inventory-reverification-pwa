@@ -12,8 +12,8 @@ document.addEventListener('DOMContentLoaded', () => {
     isRegisterMode: false,
     activeZoneId: null,
     currentFilter: 'todos',
-    currentDateFilter: 'all',
     currentSubView: 'articles',
+    zoneVisibilityFilter: 'all',
     zoneSearchQuery: '',
     articleSearchQuery: '',
     theme: localStorage.getItem('theme_preference') || 'system'
@@ -169,8 +169,26 @@ document.addEventListener('DOMContentLoaded', () => {
       InventoryUI.showToast('Actividad en vivo actualizada.', 'info');
     });
 
-    InventoryUI.elements.btnToggleActivity?.addEventListener('click', () => {
-      InventoryUI.elements.activitySidebar?.classList.toggle('show-drawer');
+    InventoryUI.elements.btnToggleActivity?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const isOpen = InventoryUI.toggleActivityDropdown();
+      if (isOpen) {
+        await refreshSidebarLogs();
+      }
+    });
+
+    InventoryUI.elements.btnCloseActivity?.addEventListener('click', () => {
+      InventoryUI.closeActivityDropdown();
+    });
+
+    InventoryUI.elements.activityDropdownBackdrop?.addEventListener('click', () => {
+      InventoryUI.closeActivityDropdown();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && InventoryUI.isActivityDropdownOpen()) {
+        InventoryUI.closeActivityDropdown();
+      }
     });
   }
 
@@ -201,10 +219,12 @@ document.addEventListener('DOMContentLoaded', () => {
   async function refreshZonesView() {
     try {
       const zones = await InventoryStorage.getAllZones();
+      const isAdmin = AppState.currentUser?.role === 'admin';
       InventoryUI.renderZonesList(zones, AppState.zoneSearchQuery, {
         onSelectZone: (zoneId) => openZoneDetail(zoneId),
-        onDeleteZone: (zone)   => confirmDeleteZone(zone)
-      });
+        onDeleteZone: (zone)   => confirmDeleteZone(zone),
+        onToggleZoneVisibility: (zone, hide) => handleToggleZoneVisibility(zone, hide)
+      }, isAdmin, AppState.zoneVisibilityFilter);
       await refreshSidebarLogs();
     } catch (err) {
       console.error('[App] Error cargando zonas:', err);
@@ -222,7 +242,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
       AppState.activeZoneId = zoneId;
       AppState.currentFilter = 'todos';
-      AppState.currentDateFilter = 'all';
       AppState.currentSubView = 'articles';
       AppState.articleSearchQuery = '';
 
@@ -232,10 +251,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
       InventoryUI.elements.filterTabs?.forEach(tab => {
         tab.classList.toggle('active', tab.dataset.filter === 'todos');
-      });
-
-      InventoryUI.elements.dateFilterTabs?.forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.dateFilter === 'all');
       });
 
       InventoryUI.showZoneDetailView(zone);
@@ -270,11 +285,10 @@ document.addEventListener('DOMContentLoaded', () => {
         console.warn('No se pudieron cargar planes de acción:', e);
       }
 
-      // Renderizar lista de artículos agrupada por fechas con periodo
+      // Renderizar lista de artículos agrupada por fechas (sin filtro de periodo, organizada por carpetas)
       InventoryUI.renderArticlesList(
         zone.articles,
         AppState.currentFilter,
-        AppState.currentDateFilter,
         AppState.articleSearchQuery,
         {
           onToggleVerification: (articleId, isVerified) => handleToggleVerification(articleId, isVerified),
@@ -389,6 +403,17 @@ document.addEventListener('DOMContentLoaded', () => {
       await refreshZonesView();
     });
 
+    // Pestañas de filtro de zonas para Admin (Todas / Activas / Ocultas)
+    const adminFilterTabs = document.querySelectorAll('#zones-admin-filters .filter-tab');
+    adminFilterTabs.forEach(tab => {
+      tab.addEventListener('click', async () => {
+        adminFilterTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        AppState.zoneVisibilityFilter = tab.dataset.zoneFilter || 'all';
+        await refreshZonesView();
+      });
+    });
+
     InventoryUI.elements.fabAddZone?.addEventListener('click', () => openZoneModal());
   }
 
@@ -464,6 +489,35 @@ document.addEventListener('DOMContentLoaded', () => {
     );
   }
 
+  async function handleToggleZoneVisibility(zone, hide) {
+    // Si va a ocultar: pedir confirmación
+    if (hide) {
+      InventoryUI.showConfirmDialog(
+        'Ocultar Zona',
+        `La zona "${zone.name}" quedará oculta para los auditores. Tú (admin) seguirás viéndola marcada como oculta. ¿Deseas continuar?`,
+        async () => {
+          try {
+            await InventoryStorage.toggleZoneVisibility(zone.id, true);
+            InventoryUI.showToast(`Zona "${zone.name}" ocultada.`, 'info');
+            await refreshZonesView();
+          } catch (err) {
+            InventoryUI.showToast('Error al ocultar zona: ' + err.message, 'error');
+          }
+        },
+        'Ocultar'
+      );
+    } else {
+      // Mostrar: no necesita confirmación
+      try {
+        await InventoryStorage.toggleZoneVisibility(zone.id, false);
+        InventoryUI.showToast(`Zona "${zone.name}" visible nuevamente.`, 'success');
+        await refreshZonesView();
+      } catch (err) {
+        InventoryUI.showToast('Error al mostrar zona: ' + err.message, 'error');
+      }
+    }
+  }
+
   // ─── Eventos Vista de Detalle ─────────────────────────────────────────────────
   function bindZoneDetailEvents() {
     InventoryUI.elements.articleSearchInput?.addEventListener('input', async (e) => {
@@ -480,24 +534,16 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     });
 
-    InventoryUI.elements.dateFilterTabs?.forEach(tab => {
-      tab.addEventListener('click', async () => {
-        InventoryUI.elements.dateFilterTabs.forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        AppState.currentDateFilter = tab.dataset.dateFilter;
-        await refreshZoneDetailView();
-      });
-    });
-
     InventoryUI.elements.fabAddArticle?.addEventListener('click', () => openArticleModal());
   }
 
-  // ─── Sidebar de Actividad en Vivo ───────────────────────────────────────────
+  // ─── Sidebar de Actividad en Vivo (Visible para todos los usuarios autenticados) ───
   async function refreshSidebarLogs() {
-    if (AppState.currentUser?.role !== 'admin') return;
+    if (!AppState.currentUser) return;
     try {
       const logs = await InventoryStorage.getActivityLogs();
-      InventoryUI.renderActivitySidebarFeed(logs);
+      const isAdmin = AppState.currentUser?.role === 'admin';
+      InventoryUI.renderActivitySidebarFeed(logs, isAdmin);
     } catch (e) {
       console.warn('[App] Error actualizando feed lateral:', e);
     }

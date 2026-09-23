@@ -42,6 +42,7 @@ const InventoryUI = (() => {
     // Elementos de la vista de Zonas
     zonesListContainer: document.getElementById('zones-list-container'),
     zoneSearchInput: document.getElementById('zone-search-input'),
+    zonesAdminFilters: document.getElementById('zones-admin-filters'),
     fabAddZone: document.getElementById('fab-add-zone'),
 
     // Elementos de la vista de Detalle de Zona
@@ -61,13 +62,14 @@ const InventoryUI = (() => {
     noveltyStatsContainer: document.getElementById('novelty-stats-container'),
     logsListContainer: document.getElementById('logs-list-container'),
     fabAddNovelty: document.getElementById('fab-add-novelty'),
-    dateFilterTabs: document.querySelectorAll('.date-tab'),
 
-    // Sidebar de Actividad en Vivo
+    // Desplegable de Actividad y Logs
     activitySidebar: document.getElementById('activity-sidebar'),
+    activityDropdownBackdrop: document.getElementById('activity-dropdown-backdrop'),
     activitySidebarFeed: document.getElementById('activity-sidebar-feed'),
     btnRefreshSidebar: document.getElementById('btn-refresh-sidebar'),
     btnToggleActivity: document.getElementById('btn-toggle-activity'),
+    btnCloseActivity: document.getElementById('btn-close-activity'),
 
     // Modales y Diálogos
     modalContainer: document.getElementById('modal-container'),
@@ -120,16 +122,46 @@ const InventoryUI = (() => {
   }
 
   /**
+   * Métodos para abrir y cerrar el desplegable de Últimos Cambios
+   */
+  function openActivityDropdown() {
+    elements.activitySidebar?.classList.remove('hidden');
+    elements.activityDropdownBackdrop?.classList.remove('hidden');
+    elements.btnToggleActivity?.classList.add('active');
+  }
+
+  function closeActivityDropdown() {
+    elements.activitySidebar?.classList.add('hidden');
+    elements.activityDropdownBackdrop?.classList.add('hidden');
+    elements.btnToggleActivity?.classList.remove('active');
+  }
+
+  function toggleActivityDropdown() {
+    const isHidden = elements.activitySidebar?.classList.contains('hidden');
+    if (isHidden) {
+      openActivityDropdown();
+      return true;
+    } else {
+      closeActivityDropdown();
+      return false;
+    }
+  }
+
+  function isActivityDropdownOpen() {
+    return !elements.activitySidebar?.classList.contains('hidden');
+  }
+
+  /**
    * Control de pantalla de autenticación y Shell de la app
    */
   function showAuthView() {
     if (elements.authView) elements.authView.classList.remove('hidden');
     if (elements.appShell) elements.appShell.classList.add('hidden');
     
-    // Ocultar elementos restringidos al cerrar sesión o no estar autenticado
-    elements.activitySidebar?.classList.add('hidden');
+    closeActivityDropdown();
     elements.btnToggleActivity?.classList.add('hidden');
     elements.btnToggleLogs?.classList.add('hidden');
+    elements.zonesAdminFilters?.classList.add('hidden');
   }
 
   function showAppShell(user) {
@@ -144,20 +176,17 @@ const InventoryUI = (() => {
       elements.userChipEmail.textContent = `${displayName} (${roleLabel})`;
     }
 
-    const appLayoutGrid = document.querySelector('.app-layout-grid');
+    // El botón desplegable de Últimos Cambios está disponible para TODOS los usuarios logueados
+    elements.btnToggleActivity?.classList.remove('hidden');
+    closeActivityDropdown();
 
-    // La actividad en vivo (Sidebar), botón de barra superior y pestaña Historial/Logs solo visibles para Admin
+    // La pestaña "Historial / Logs" totales y los filtros de visibilidad de zona solo son visibles para el Admin
     if (isAdmin) {
-      elements.activitySidebar?.classList.remove('hidden');
-      elements.btnToggleActivity?.classList.remove('hidden');
       elements.btnToggleLogs?.classList.remove('hidden');
-      appLayoutGrid?.classList.remove('no-sidebar');
+      elements.zonesAdminFilters?.classList.remove('hidden');
     } else {
-      elements.activitySidebar?.classList.add('hidden');
-      elements.btnToggleActivity?.classList.add('hidden');
       elements.btnToggleLogs?.classList.add('hidden');
-      appLayoutGrid?.classList.add('no-sidebar');
-      // Asegurar que no quede seleccionada la pestaña de logs
+      elements.zonesAdminFilters?.classList.add('hidden');
       switchSubView('articles');
     }
   }
@@ -184,7 +213,10 @@ const InventoryUI = (() => {
     elements.btnBack.classList.remove('hidden');
     elements.btnExportZone.classList.remove('hidden');
     elements.headerTitle.textContent = zone.name;
-    elements.headerSubtitle.textContent = `Creada: ${InventoryData.formatDate(zone.createdAt)}`;
+
+    const createdBy = zone.createdBy || '@admin';
+    const updatedBy = zone.updatedBy || zone.createdBy || '@admin';
+    elements.headerSubtitle.textContent = `👤 Creado por ${escapeHTML(createdBy)} (${InventoryData.formatDate(zone.createdAt)}) • ✏️ Modif: ${escapeHTML(updatedBy)} (${InventoryData.getRelativeTime(zone.updatedAt || zone.createdAt)})`;
     switchSubView('articles');
   }
 
@@ -212,22 +244,49 @@ const InventoryUI = (() => {
   }
 
   /**
-   * Renderiza las tarjetas de la lista de Zonas (agrupadas por fecha si hay varias).
+   * Renderiza las tarjetas de la lista de Zonas de Responsabilidad.
    * @param {Array} zones 
    * @param {string} searchQuery 
+   * @param {Object} callbacks 
+   * @param {boolean} isAdmin - Si es admin puede ver/gestionar zonas ocultas
+   * @param {string} zoneFilter - 'all' | 'visible' | 'hidden'
    */
-  function renderZonesList(zones, searchQuery = '', callbacks = {}) {
+  function renderZonesList(zones, searchQuery = '', callbacks = {}, isAdmin = false, zoneFilter = 'all') {
     const container = elements.zonesListContainer;
     container.innerHTML = '';
 
+    // Actualizar contadores en la barra de filtros de admin
+    const countAll = document.getElementById('count-all-zones');
+    const countVis = document.getElementById('count-visible-zones');
+    const countHid = document.getElementById('count-hidden-zones');
+    if (countAll) countAll.textContent = zones.length;
+    if (countVis) countVis.textContent = zones.filter(z => !z.hidden).length;
+    if (countHid) countHid.textContent = zones.filter(z => Boolean(z.hidden)).length;
+
     const query = searchQuery.trim().toLowerCase();
-    const filteredZones = zones.filter(z => z.name.toLowerCase().includes(query));
+
+    // Filtrado por rol y por pestaña
+    let filteredZones = zones.filter(z => z.name.toLowerCase().includes(query));
+    if (!isAdmin) {
+      // Los auditores NUNCA ven zonas ocultas
+      filteredZones = filteredZones.filter(z => !z.hidden);
+    } else {
+      // El admin puede filtrar por Todas, Activas o Ocultas
+      if (zoneFilter === 'visible') {
+        filteredZones = filteredZones.filter(z => !z.hidden);
+      } else if (zoneFilter === 'hidden') {
+        filteredZones = filteredZones.filter(z => Boolean(z.hidden));
+      }
+    }
 
     if (filteredZones.length === 0) {
+      const msg = !isAdmin 
+        ? 'No hay zonas activas registradas' 
+        : (zoneFilter === 'hidden' ? 'No hay zonas ocultas' : 'No se encontraron zonas');
       container.innerHTML = `
         <div class="empty-state">
           <span class="material-symbols-outlined empty-icon">inventory_2</span>
-          <h3>${query ? 'No se encontraron zonas' : 'No hay zonas registradas'}</h3>
+          <h3>${msg}</h3>
           <p>${query ? 'Intenta buscar con otros términos.' : 'Presiona el botón "+" para crear tu primera zona de responsabilidad.'}</p>
         </div>
       `;
@@ -237,19 +296,45 @@ const InventoryUI = (() => {
     filteredZones.forEach(zone => {
       const stats = InventoryData.calculateZoneStats(zone.articles);
       const card = document.createElement('div');
-      card.className = 'zone-card surface-card ripple';
+      const isHidden = Boolean(zone.hidden);
+      card.className = `zone-card surface-card ripple${isHidden ? ' zone-hidden' : ''}`;
       card.dataset.id = zone.id;
+
+      const createdUser = zone.createdBy || '@admin';
+      const updatedUser = zone.updatedBy || zone.createdBy || '@admin';
+
+      // Botón de visibilidad — solo para admin
+      const visibilityBtn = isAdmin ? `
+        <button class="icon-btn btn-toggle-zone-visibility ${isHidden ? 'zone-is-hidden' : ''}"
+          title="${isHidden ? 'Mostrar zona' : 'Ocultar zona'}"
+          data-id="${zone.id}"
+          data-hidden="${isHidden}">
+          <span class="material-symbols-outlined">${isHidden ? 'visibility' : 'visibility_off'}</span>
+        </button>
+      ` : '';
+
+      // Badge "Oculta" visible solo para admin
+      const hiddenBadge = isAdmin && isHidden ? `
+        <span class="zone-hidden-badge">
+          <span class="material-symbols-outlined text-icon">visibility_off</span>
+          Oculta
+        </span>
+      ` : '';
 
       card.innerHTML = `
         <div class="zone-card-header">
           <div class="zone-info">
-            <h3 class="zone-title">${escapeHTML(zone.name)}</h3>
+            <div class="zone-title-row">
+              <h3 class="zone-title">${escapeHTML(zone.name)}</h3>
+              ${hiddenBadge}
+            </div>
             <span class="zone-date">
               <span class="material-symbols-outlined text-icon">calendar_today</span>
               ${InventoryData.formatDate(zone.createdAt)}
             </span>
           </div>
           <div class="zone-actions">
+            ${visibilityBtn}
             <button class="icon-btn btn-delete-zone" title="Eliminar Zona" data-id="${zone.id}">
               <span class="material-symbols-outlined">delete</span>
             </button>
@@ -274,20 +359,40 @@ const InventoryUI = (() => {
         <div class="progress-bar-container">
           <div class="progress-bar-fill" style="width: ${stats.percentageVerified}%"></div>
         </div>
+
+        <div class="zone-author-meta">
+          <div class="author-item">
+            <span class="material-symbols-outlined author-icon">person_add</span>
+            <span>Creado por: <strong>${escapeHTML(createdUser)}</strong></span>
+          </div>
+          <div class="author-item">
+            <span class="material-symbols-outlined author-icon">edit_note</span>
+            <span>Modif: <strong>${escapeHTML(updatedUser)}</strong> (${InventoryData.getRelativeTime(zone.updatedAt || zone.createdAt)})</span>
+          </div>
+        </div>
       `;
 
       card.addEventListener('click', (e) => {
+        // Botón de ocultar/mostrar (solo admin)
+        if (e.target.closest('.btn-toggle-zone-visibility')) {
+          e.stopPropagation();
+          if (callbacks.onToggleZoneVisibility) callbacks.onToggleZoneVisibility(zone, !isHidden);
+          return;
+        }
+        // Botón de eliminar
         if (e.target.closest('.btn-delete-zone')) {
           e.stopPropagation();
           if (callbacks.onDeleteZone) callbacks.onDeleteZone(zone);
           return;
         }
+        // Click en la tarjeta — navegar a la zona (incluso si está oculta, admin puede entrar)
         if (callbacks.onSelectZone) callbacks.onSelectZone(zone.id);
       });
 
       container.appendChild(card);
     });
   }
+
 
   /**
    * Renderiza las tarjetas de estadísticas superiores dentro de una zona.
@@ -320,21 +425,13 @@ const InventoryUI = (() => {
   }
 
   /**
-   * Renderiza la lista de artículos agrupada por categorías de fecha (Hoy, Ayer, Esta semana, etc.).
+   * Renderiza la lista de artículos agrupada por categorías de fecha y carpeta para antiguos (> 1 mes).
    * @param {Array} articles 
    * @param {string} currentFilter - 'todos', 'pendientes', 'verificados', 'faltantes', 'sobrantes'
    * @param {string} searchQuery 
    * @param {Object} callbacks 
    */
-  /**
-   * Renderiza la lista de artículos agrupada por categorías de fecha (Hoy, Ayer, Esta semana, etc.).
-   * @param {Array} articles 
-   * @param {string} currentFilter - 'todos', 'pendientes', 'verificados', 'faltantes', 'sobrantes'
-   * @param {string} currentDateFilter - 'all', 'today', 'yesterday', 'week', 'older'
-   * @param {string} searchQuery 
-   * @param {Object} callbacks 
-   */
-  function renderArticlesList(articles = [], currentFilter = 'todos', currentDateFilter = 'all', searchQuery = '', callbacks = {}) {
+  function renderArticlesList(articles = [], currentFilter = 'todos', searchQuery = '', callbacks = {}) {
     const container = elements.articlesListContainer;
     container.innerHTML = '';
 
@@ -342,8 +439,8 @@ const InventoryUI = (() => {
 
     // 1. Filtro de búsqueda
     let filtered = articles.filter(art => {
-      const matchId = art.id.toLowerCase().includes(query);
-      const matchName = art.name.toLowerCase().includes(query);
+      const matchId = (art.id || '').toLowerCase().includes(query);
+      const matchName = (art.name || '').toLowerCase().includes(query);
       return matchId || matchName;
     });
 
@@ -358,76 +455,117 @@ const InventoryUI = (() => {
       filtered = filtered.filter(a => a.status === 'sobrante');
     }
 
-    // 3. Filtro por Periodo de Fecha
-    if (currentDateFilter && currentDateFilter !== 'all') {
-      const now = new Date();
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-      filtered = filtered.filter(art => {
-        const raw = art.verifiedAt || art.updatedAt || art.createdAt;
-        if (!raw) return currentDateFilter === 'older';
-        const d = new Date(raw);
-        if (isNaN(d.getTime())) return currentDateFilter === 'older';
-        const itemDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-        const diffDays = Math.floor((today - itemDate) / (1000 * 60 * 60 * 24));
-
-        if (currentDateFilter === 'today') return diffDays === 0;
-        if (currentDateFilter === 'yesterday') return diffDays === 1;
-        if (currentDateFilter === 'week') return diffDays <= 7;
-        if (currentDateFilter === 'older') return diffDays > 7;
-        return true;
-      });
-    }
-
     if (filtered.length === 0) {
       container.innerHTML = `
         <div class="empty-state">
           <span class="material-symbols-outlined empty-icon">category</span>
           <h3>No se encontraron artículos</h3>
-          <p>No existen registros que coincidan con la búsqueda, filtro de estado o periodo seleccionado.</p>
+          <p>No existen registros que coincidan con la búsqueda o el filtro de estado seleccionado.</p>
         </div>
       `;
       return;
     }
 
-    // Agrupar por fecha de verificación o creación (Timeline Visual)
-    const dateGroups = InventoryData.groupItemsByDate(filtered, (art) => art.verifiedAt || art.updatedAt || art.createdAt);
+    // 3. Separar en Recientes (<= 30 días) y Antiguos / Archivados (> 30 días / 1 mes)
+    const recentArticles = [];
+    const archivedArticles = [];
 
-    dateGroups.forEach(group => {
-      const groupSection = document.createElement('div');
-      groupSection.className = 'date-group-section';
+    filtered.forEach(art => {
+      const dateVal = art.verifiedAt || art.updatedAt || art.createdAt;
+      if (InventoryData.isOlderThanOneMonth(dateVal)) {
+        archivedArticles.push(art);
+      } else {
+        recentArticles.push(art);
+      }
+    });
 
-      const isToday = group.category.startsWith('Hoy');
-      const groupHeader = document.createElement('div');
-      groupHeader.className = 'date-group-header';
-      groupHeader.innerHTML = `
-        <span class="date-group-badge ${isToday ? 'badge-today' : ''}">
-          <span class="material-symbols-outlined text-icon">${isToday ? 'event_available' : 'calendar_month'}</span>
-          ${escapeHTML(group.category)}
-        </span>
-        <span class="date-group-count">${group.items.length} ${group.items.length === 1 ? 'artículo' : 'artículos'}</span>
+    // 4. Renderizar artículos recientes agrupados por fecha
+    if (recentArticles.length > 0) {
+      const dateGroups = InventoryData.groupItemsByDate(recentArticles, (art) => art.verifiedAt || art.updatedAt || art.createdAt);
+
+      dateGroups.forEach(group => {
+        const groupSection = document.createElement('div');
+        groupSection.className = 'date-group-section';
+
+        const isToday = group.category.startsWith('Hoy');
+        const groupHeader = document.createElement('div');
+        groupHeader.className = 'date-group-header';
+        groupHeader.innerHTML = `
+          <span class="date-group-badge ${isToday ? 'badge-today' : ''}">
+            <span class="material-symbols-outlined text-icon">${isToday ? 'event_available' : 'calendar_month'}</span>
+            ${escapeHTML(group.category)}
+          </span>
+          <span class="date-group-count">${group.items.length} ${group.items.length === 1 ? 'artículo' : 'artículos'}</span>
+        `;
+        groupSection.appendChild(groupHeader);
+
+        const itemsContainer = document.createElement('div');
+        itemsContainer.className = 'date-group-items';
+
+        group.items.forEach(art => {
+          const card = _createArticleCard(art, callbacks, false);
+          itemsContainer.appendChild(card);
+        });
+
+        groupSection.appendChild(itemsContainer);
+        container.appendChild(groupSection);
+      });
+    }
+
+    // 5. Renderizar Carpeta de Artículos Antiguos (> 1 mes)
+    if (archivedArticles.length > 0) {
+      const folderWrapper = document.createElement('div');
+      folderWrapper.className = 'archive-folder-wrapper';
+
+      folderWrapper.innerHTML = `
+        <div class="archive-folder-card surface-card">
+          <div class="archive-folder-header">
+            <div class="archive-folder-title">
+              <span class="material-symbols-outlined folder-icon">folder_zip</span>
+              <div>
+                <h4>📁 Carpeta de Artículos Antiguos (> 1 mes)</h4>
+                <span class="archive-folder-desc">Artículos registrados o verificados hace más de 30 días organizados en archivo.</span>
+              </div>
+            </div>
+            <div class="archive-folder-right">
+              <span class="archive-badge">${archivedArticles.length} ${archivedArticles.length === 1 ? 'artículo' : 'artículos'}</span>
+              <button class="icon-btn folder-toggle-btn" title="Desplegar / Ocultar carpeta">
+                <span class="material-symbols-outlined folder-chevron">expand_more</span>
+              </button>
+            </div>
+          </div>
+          <div class="archive-folder-body hidden">
+            <div class="date-group-items archive-articles-items"></div>
+          </div>
+        </div>
       `;
-      groupSection.appendChild(groupHeader);
 
-      const itemsContainer = document.createElement('div');
-      itemsContainer.className = 'date-group-items';
-
-      group.items.forEach(art => {
-        const card = _createArticleCard(art, callbacks);
-        itemsContainer.appendChild(card);
+      const listInside = folderWrapper.querySelector('.archive-articles-items');
+      archivedArticles.forEach(art => {
+        listInside.appendChild(_createArticleCard(art, callbacks, true));
       });
 
-      groupSection.appendChild(itemsContainer);
-      container.appendChild(groupSection);
-    });
+      const header = folderWrapper.querySelector('.archive-folder-header');
+      const body = folderWrapper.querySelector('.archive-folder-body');
+      const chevron = folderWrapper.querySelector('.folder-chevron');
+
+      header.addEventListener('click', () => {
+        const isHidden = body.classList.toggle('hidden');
+        if (chevron) {
+          chevron.textContent = isHidden ? 'expand_more' : 'expand_less';
+        }
+      });
+
+      container.appendChild(folderWrapper);
+    }
   }
 
   /**
    * Helper para construir una tarjeta individual de artículo
    */
-  function _createArticleCard(art, callbacks = {}) {
+  function _createArticleCard(art, callbacks = {}, isArchived = false) {
     const card = document.createElement('div');
-    card.className = `article-card surface-card ${art.verified ? 'is-verified' : ''} ${art.locked ? 'is-locked' : ''}`;
+    card.className = `article-card surface-card ${art.verified ? 'is-verified' : ''} ${art.locked ? 'is-locked' : ''} ${isArchived ? 'is-archived' : ''}`;
     card.dataset.id = art.id;
 
     let statusBadgeClass = 'badge-correcto';
@@ -443,6 +581,9 @@ const InventoryUI = (() => {
       statusBadgeLabel = `Faltante (${art.difference})`;
       statusIcon = 'warning';
     }
+
+    const createdUser = art.createdBy || '@admin';
+    const updatedUser = art.updatedBy || art.createdBy || '@admin';
 
     card.innerHTML = `
       <div class="article-card-header">
@@ -520,6 +661,18 @@ const InventoryUI = (() => {
             Verificado el: ${InventoryData.formatDate(art.verifiedAt)}
           </div>
         ` : ''}
+
+        <!-- Atribución de Usuario en Artículo -->
+        <div class="article-author-meta">
+          <span class="author-tag">
+            <span class="material-symbols-outlined author-icon">person_add</span>
+            Creado: <strong>${escapeHTML(createdUser)}</strong>
+          </span>
+          <span class="author-tag">
+            <span class="material-symbols-outlined author-icon">edit_note</span>
+            Modif: <strong>${escapeHTML(updatedUser)}</strong> <span class="author-time">(${InventoryData.getRelativeTime(art.updatedAt || art.verifiedAt || art.createdAt)})</span>
+          </span>
+        </div>
       </div>
 
       <div class="article-card-footer">
@@ -785,22 +938,32 @@ const InventoryUI = (() => {
   }
 
   /**
-   * Renderiza el Feed lateral de actividad reciente en tiempo real.
+   * Renderiza el Feed lateral de actividad reciente en tiempo real (visible para todos).
    * @param {Array} logs 
+   * @param {boolean} isAdmin - Si es admin, puede ver inicios de sesión; si no, solo cambios funcionales.
    */
-  function renderActivitySidebarFeed(logs = []) {
+  function renderActivitySidebarFeed(logs = [], isAdmin = false) {
     const container = elements.activitySidebarFeed;
     if (!container) return;
     container.innerHTML = '';
 
-    const recentLogs = (logs || []).slice(0, 15);
+    // Filtrar: los usuarios normales NO ven inicios de sesión ni autenticación
+    const filteredLogs = (logs || []).filter(log => {
+      if (isAdmin) return true;
+      const act = (log.action || '').toLowerCase();
+      const ent = (log.entityType || '').toLowerCase();
+      if (act === 'login' || act === 'logout' || ent === 'auth') return false;
+      return true;
+    });
+
+    const recentLogs = filteredLogs.slice(0, 25);
 
     if (recentLogs.length === 0) {
       container.innerHTML = `
-        <div class="empty-state small" style="padding: 24px 10px; text-align: center;">
-          <span class="material-symbols-outlined empty-icon">history_toggle_off</span>
-          <h4 style="font-size: 0.9rem; margin: 6px 0 2px;">Sin actividad reciente</h4>
-          <p style="font-size: 0.78rem; color: var(--text-muted);">Los cambios de los auditores aparecerán aquí en vivo.</p>
+        <div class="empty-state small" style="padding: 28px 12px; text-align: center;">
+          <span class="material-symbols-outlined empty-icon" style="font-size: 36px; opacity: 0.6;">history_toggle_off</span>
+          <h4 style="font-size: 0.92rem; margin: 8px 0 3px; font-weight: 700;">Sin cambios recientes</h4>
+          <p style="font-size: 0.78rem; color: var(--text-muted); line-height: 1.4;">Los cambios de inventario, verificaciones y creaciones aparecerán aquí en vivo.</p>
         </div>
       `;
       return;
@@ -808,22 +971,59 @@ const InventoryUI = (() => {
 
     recentLogs.forEach(log => {
       const item = document.createElement('div');
-      let typeClass = '';
-      if (log.action.includes('verify') || log.action.includes('confirm')) typeClass = 'item-verify';
-      else if (log.action.includes('delete')) typeClass = 'item-delete';
-      else if (log.action.includes('update') || log.action.includes('unlock')) typeClass = 'item-update';
+      
+      let typeClass = 'item-info';
+      let actionLabel = 'Modificación';
+      let actionIcon = 'edit_note';
+
+      const act = (log.action || '').toLowerCase();
+      if (act.includes('verify') || act.includes('confirm')) {
+        typeClass = 'item-verify';
+        actionLabel = 'Verificación';
+        actionIcon = 'check_circle';
+      } else if (act.includes('delete')) {
+        typeClass = 'item-delete';
+        actionLabel = 'Eliminación';
+        actionIcon = 'delete';
+      } else if (act.includes('create') || act.includes('add') || act.includes('import')) {
+        typeClass = 'item-create';
+        actionLabel = 'Nuevo / Creado';
+        actionIcon = 'add_circle';
+      } else if (act.includes('unlock')) {
+        typeClass = 'item-update';
+        actionLabel = 'Desbloqueo';
+        actionIcon = 'lock_open';
+      } else if (act.includes('login') || act.includes('auth')) {
+        typeClass = 'item-auth';
+        actionLabel = 'Acceso';
+        actionIcon = 'login';
+      }
+
+      const userTag = log.userEmail || '@admin';
 
       item.className = `sidebar-feed-item ${typeClass}`;
       item.innerHTML = `
         <div class="sidebar-item-header">
-          <span class="sidebar-user-tag">
-            <span class="material-symbols-outlined text-icon">account_circle</span>
-            ${escapeHTML(log.userEmail || 'anon')}
+          <div class="sidebar-user-block">
+            <span class="sidebar-user-tag">
+              <span class="material-symbols-outlined user-tiny-icon">account_circle</span>
+              ${escapeHTML(userTag)}
+            </span>
+          </div>
+          <span class="sidebar-item-time" title="${InventoryData.formatDate(log.createdAt)}">
+            <span class="material-symbols-outlined text-icon">schedule</span>
+            ${InventoryData.getRelativeTime(log.createdAt)}
           </span>
-          <span class="sidebar-item-time">${InventoryData.getRelativeTime(log.createdAt)}</span>
+        </div>
+        <div class="sidebar-action-row">
+          <span class="sidebar-action-pill pill-${typeClass}">
+            <span class="material-symbols-outlined pill-icon">${actionIcon}</span>
+            ${actionLabel}
+          </span>
+          ${log.entityName ? `<span class="sidebar-entity-name" title="${escapeHTML(log.entityName)}">${escapeHTML(log.entityName)}</span>` : ''}
         </div>
         <div class="sidebar-item-desc">
-          ${log.entityName ? `<strong>[${escapeHTML(log.entityName)}]</strong> ` : ''}${escapeHTML(log.details || log.action.replace('_', ' '))}
+          ${escapeHTML(log.details || log.action.replace(/_/g, ' '))}
         </div>
       `;
       container.appendChild(item);
@@ -1185,6 +1385,10 @@ const InventoryUI = (() => {
     renderNoveltiesList,
     renderActivityLogs,
     renderActivitySidebarFeed,
+    openActivityDropdown,
+    closeActivityDropdown,
+    toggleActivityDropdown,
+    isActivityDropdownOpen,
     showModal,
     showConfirmDialog,
     showImageModal,
