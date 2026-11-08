@@ -84,6 +84,60 @@ const InventoryStorage = (() => {
     });
   }
 
+  function _enrichZoneWithLogs(zone, logs) {
+    if (!zone || !Array.isArray(logs) || logs.length === 0) return zone;
+    const zoneLogs = logs.filter(l => l.zoneId === zone.id && l.entityType !== 'auth');
+    if (zoneLogs.length > 0) {
+      const newestZoneLog = zoneLogs[0];
+      if (newestZoneLog.userEmail) zone.updatedBy = newestZoneLog.userEmail;
+      if (newestZoneLog.createdAt && (!zone.updatedAt || newestZoneLog.createdAt > zone.updatedAt)) {
+        zone.updatedAt = newestZoneLog.createdAt;
+      }
+      const createLog = [...zoneLogs].reverse().find(l => l.action === 'create_zone') || zoneLogs[zoneLogs.length - 1];
+      if (createLog && createLog.userEmail) zone.createdBy = createLog.userEmail;
+    }
+
+    (zone.articles || []).forEach(art => {
+      const codeStr = String(art.id || '').toLowerCase();
+      const nameStr = String(art.name || '').toLowerCase();
+      const artLogs = zoneLogs.filter(l => {
+        if (l.entityType !== 'article' && l.entityType !== 'plan') return false;
+        const eName = String(l.entityName || '').toLowerCase();
+        const det = String(l.details || '').toLowerCase();
+        return (codeStr && (eName === codeStr || det.includes(codeStr))) || (nameStr && eName === nameStr);
+      });
+
+      art.historyCount = artLogs.length;
+      if (artLogs.length > 0) {
+        if (artLogs[0].userEmail) art.updatedBy = artLogs[0].userEmail;
+        if (artLogs[0].createdAt && (!art.updatedAt || artLogs[0].createdAt > art.updatedAt)) {
+          art.updatedAt = artLogs[0].createdAt;
+        }
+        const oldestArtLog = artLogs[artLogs.length - 1];
+        if (oldestArtLog && oldestArtLog.userEmail) art.createdBy = oldestArtLog.userEmail;
+      }
+
+      const discrepancyLogs = artLogs.filter(l => /\(faltante\)|\(sobrante\)/i.test(l.details || '')).length;
+      art.discrepancyCount = Math.max(discrepancyLogs, art.status !== 'correcto' ? 1 : 0);
+      art.isRecurrent = art.discrepancyCount >= 2;
+    });
+
+    return zone;
+  }
+
+  async function getArticleHistory(zoneId, articleId, articleName = '') {
+    const logs = await getActivityLogs(zoneId);
+    const codeStr = String(articleId || '').toLowerCase();
+    const nameStr = String(articleName || '').toLowerCase();
+    return logs.filter(l => {
+      if (l.entityType !== 'article' && l.entityType !== 'plan') return false;
+      const eName = String(l.entityName || '').toLowerCase();
+      const det = String(l.details || '').toLowerCase();
+      return (codeStr && (eName === codeStr || det.includes(codeStr))) || (nameStr && eName === nameStr);
+    });
+  }
+
+
   // ---------------------------------------------------------------------------
   // Autenticación por Usuario y Contraseña (gestionada por Admin en Supabase)
   // ---------------------------------------------------------------------------
@@ -399,11 +453,14 @@ const InventoryStorage = (() => {
       (verRows || []).forEach(v => { verificationMap[v.article_id] = v; });
     }
 
+    let allLogs = [];
+    try { allLogs = await getActivityLogs(); } catch (e) { /* ignore */ }
+
     return zoneRows.map(zRow => {
       const zone = rowToZone(zRow);
       const zArticles = (articleRows || []).filter(a => a.zone_id === zRow.id);
       zone.articles = rowsToArticles(zArticles, verificationMap);
-      return zone;
+      return _enrichZoneWithLogs(zone, allLogs);
     });
   }
 
@@ -436,9 +493,12 @@ const InventoryStorage = (() => {
       (verRows || []).forEach(v => { verificationMap[v.article_id] = v; });
     }
 
+    let zoneLogs = [];
+    try { zoneLogs = await getActivityLogs(zoneId); } catch (e) { /* ignore */ }
+
     const zone = rowToZone(zoneRow);
     zone.articles = rowsToArticles(articleRows || [], verificationMap);
-    return zone;
+    return _enrichZoneWithLogs(zone, zoneLogs);
   }
 
   // ---------------------------------------------------------------------------
@@ -537,7 +597,6 @@ const InventoryStorage = (() => {
       inventory_quantity: expectedQty,
       image_url:          articleData.image  || null,
       comment:            articleData.comment || '',
-      updated_by:         userTag,
       updated_at:         new Date().toISOString()
     };
 
@@ -550,11 +609,9 @@ const InventoryStorage = (() => {
         .eq('id', dbArticleId);
       check(error, 'saveArticle → update article');
     } else {
-      // Nuevo artículo: también incluir created_by
-      const insertPayload = { ...articlePayload, created_by: userTag };
       const { data, error } = await client
         .from('articles')
-        .upsert([insertPayload], { onConflict: 'zone_id,article_code' })
+        .upsert([articlePayload], { onConflict: 'zone_id,article_code' })
         .select()
         .single();
       check(error, 'saveArticle → upsert article');
@@ -569,7 +626,6 @@ const InventoryStorage = (() => {
       found_quantity: foundQty,
       verified,
       verified_at:    verifiedAt,
-      verified_by:    verified ? userTag : null,
       updated_at:     new Date().toISOString()
     };
 
@@ -581,12 +637,14 @@ const InventoryStorage = (() => {
     const diff   = foundQty - expectedQty;
     const status = diff === 0 ? 'correcto' : diff > 0 ? 'sobrante' : 'faltante';
 
+    const diffSign = diff > 0 ? `+${diff}` : `${diff}`;
+    const commentNote = articleData.comment ? ` | Nota: ${articleData.comment}` : '';
     await logActivity({
       zoneId,
       action: 'save_article',
       entityType: 'article',
       entityName: articleData.name,
-      details: `Artículo ${articleCode}: Sistema=${expectedQty}, Encontrado=${foundQty} (${status})`
+      details: `Artículo ${articleCode}: Sistema=${expectedQty}, Encontrado=${foundQty}, Dif=${diffSign} (${status})${commentNote}`
     });
 
     return {
@@ -651,7 +709,6 @@ const InventoryStorage = (() => {
         article_id:  artRow.id,
         verified:    isVerified,
         verified_at: verifiedAt,
-        verified_by: isVerified ? userTag : null,
         updated_at:  new Date().toISOString()
       }], { onConflict: 'article_id' });
     check(vErr, 'toggleArticleVerification → upsert verification');
@@ -872,12 +929,40 @@ const InventoryStorage = (() => {
     localStorage.setItem(ACTION_PLAN_KEY, JSON.stringify(data));
   }
 
+  function _encodePlanText(description, status = 'pendiente', createdBy = '') {
+    let clean = String(description || '').replace(/^\[(COMPLETADO|EN_PROGRESO|PENDIENTE)\]\s*/i, '').trim();
+    if (createdBy && !clean.includes('(@')) {
+      clean = `${clean} (${createdBy})`;
+    }
+    if (status === 'completado') return `[COMPLETADO] ${clean}`;
+    if (status === 'en_progreso') return `[EN_PROGRESO] ${clean}`;
+    return clean;
+  }
+
+  function _decodePlanText(rawDescription) {
+    const raw = String(rawDescription || '');
+    let status = 'pendiente';
+    let clean = raw;
+    if (/^\[COMPLETADO\]/i.test(raw)) {
+      status = 'completado';
+      clean = raw.replace(/^\[COMPLETADO\]\s*/i, '');
+    } else if (/^\[EN_PROGRESO\]/i.test(raw)) {
+      status = 'en_progreso';
+      clean = raw.replace(/^\[EN_PROGRESO\]\s*/i, '');
+    }
+    return { status, description: clean };
+  }
+
   async function saveActionPlan(zoneId, articleId, plan) {
     if (!zoneId || !articleId) throw new Error('zoneId and articleId required');
+    const userTag = _cachedUser?.username ? `@${_cachedUser.username}` : (_cachedUser?.fullName || '@admin');
     const normalizeDate = (d) => {
       if (!d) return null;
       try { return (new Date(d)).toISOString().slice(0, 10); } catch { return d; }
     };
+
+    const status = plan.status || 'pendiente';
+    const encodedDesc = _encodePlanText(plan.description || '', status, plan.createdBy || userTag);
 
     try {
       const client = db();
@@ -885,8 +970,8 @@ const InventoryStorage = (() => {
       const payload = {
         zone_id: zoneId,
         article_code: articleId,
-        description: plan.description || '',
-        start_date: normalizeDate(plan.startDate),
+        description: encodedDesc,
+        start_date: normalizeDate(plan.startDate) || new Date().toISOString().slice(0, 10),
         end_date: normalizeDate(plan.endDate),
         updated_at: new Date().toISOString()
       };
@@ -898,17 +983,19 @@ const InventoryStorage = (() => {
         .select()
         .single();
       if (!error && data) {
+        const decoded = _decodePlanText(data.description);
         await logActivity({
           zoneId,
-          action: 'save_plan',
+          action: status === 'completado' ? 'confirm_plan' : 'save_plan',
           entityType: 'plan',
           entityName: articleId,
-          details: `Plan de acción registrado: "${plan.description}"`
+          details: `Plan de acción (${status}) para artículo ${articleId}: "${decoded.description}"`
         });
         return {
           id: data.id,
           articleId: data.article_code,
-          description: data.description,
+          description: decoded.description,
+          status: decoded.status,
           startDate: data.start_date,
           endDate: data.end_date,
           createdAt: data.created_at
@@ -921,12 +1008,42 @@ const InventoryStorage = (() => {
     const store = _readActionPlans();
     store[zoneId] = store[zoneId] || {};
     store[zoneId][articleId] = store[zoneId][articleId] || [];
-    const newPlan = Object.assign({ id: InventoryData.generateUniqueId(), createdAt: new Date().toISOString() }, plan || {});
-    newPlan.startDate = normalizeDate(newPlan.startDate) || '';
-    newPlan.endDate = normalizeDate(newPlan.endDate) || '';
-    store[zoneId][articleId].push(newPlan);
+    const decoded = _decodePlanText(encodedDesc);
+    const existingIdx = store[zoneId][articleId].findIndex(p => p.id === plan.id);
+    const newPlan = Object.assign({
+      id: plan.id || InventoryData.generateUniqueId(),
+      createdAt: plan.createdAt || new Date().toISOString()
+    }, plan, {
+      description: decoded.description,
+      status: decoded.status,
+      startDate: normalizeDate(plan.startDate) || new Date().toISOString().slice(0, 10),
+      endDate: normalizeDate(plan.endDate) || ''
+    });
+
+    if (existingIdx >= 0) {
+      store[zoneId][articleId][existingIdx] = newPlan;
+    } else {
+      store[zoneId][articleId].push(newPlan);
+    }
     _writeActionPlans(store);
+
+    await logActivity({
+      zoneId,
+      action: status === 'completado' ? 'confirm_plan' : 'save_plan',
+      entityType: 'plan',
+      entityName: articleId,
+      details: `Plan de acción (${status}) para artículo ${articleId}: "${decoded.description}"`
+    });
     return newPlan;
+  }
+
+  async function toggleActionPlanStatus(zoneId, plan) {
+    if (!zoneId || !plan) return null;
+    const nextStatus = plan.status === 'completado' ? 'pendiente' : 'completado';
+    return await saveActionPlan(zoneId, plan.articleId, {
+      ...plan,
+      status: nextStatus
+    });
   }
 
   async function getActionPlansForZone(zoneId) {
@@ -938,14 +1055,18 @@ const InventoryStorage = (() => {
         .eq('zone_id', zoneId)
         .order('start_date', { ascending: true });
       if (!error && data) {
-        return data.map(p => ({
-          id: p.id,
-          articleId: p.article_code,
-          description: p.description,
-          startDate: p.start_date,
-          endDate: p.end_date,
-          createdAt: p.created_at
-        }));
+        return data.map(p => {
+          const decoded = _decodePlanText(p.description);
+          return {
+            id: p.id,
+            articleId: p.article_code,
+            description: decoded.description,
+            status: decoded.status,
+            startDate: p.start_date,
+            endDate: p.end_date,
+            createdAt: p.created_at
+          };
+        });
       }
     } catch (e) {
       console.warn('[Storage] getActionPlansForZone fallback:', e);
@@ -954,7 +1075,13 @@ const InventoryStorage = (() => {
     const out = [];
     if (!store[zoneId]) return [];
     Object.keys(store[zoneId]).forEach(articleId => {
-      (store[zoneId][articleId] || []).forEach(p => out.push(Object.assign({ articleId }, p)));
+      (store[zoneId][articleId] || []).forEach(p => {
+        const decoded = _decodePlanText(p.description);
+        out.push(Object.assign({ articleId }, p, {
+          description: decoded.description,
+          status: p.status || decoded.status
+        }));
+      });
     });
     out.sort((a,b)=> new Date(a.startDate) - new Date(b.startDate));
     return out;
@@ -1094,7 +1221,9 @@ const InventoryStorage = (() => {
     getNoveltiesForZone,
     deleteNovelty,
     toggleNoveltyConfirmation,
+    getArticleHistory,
     saveActionPlan,
+    toggleActionPlanStatus,
     getActionPlansForZone,
     deleteActionPlan
   };

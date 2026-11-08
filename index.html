@@ -179,17 +179,33 @@
               <!-- Renderizado dinámico desde JS -->
             </div>
 
+            <!-- Acciones Rápidas de Zona (Móvil / Reportes) -->
+            <div class="zone-quick-actions">
+              <button type="button" class="btn btn-outlined btn-sm zone-action-chip" id="btn-share-summary" title="Copiar o compartir resumen de reverificación">
+                <span class="material-symbols-outlined text-icon">share</span>
+                Resumen WhatsApp
+              </button>
+              <button type="button" class="btn btn-outlined btn-sm zone-action-chip" id="btn-export-csv" title="Descargar reporte en CSV para Excel">
+                <span class="material-symbols-outlined text-icon">table_view</span>
+                Exportar Excel (CSV)
+              </button>
+            </div>
+
             <!-- Calendario de la Zona (Planes de Acción) -->
             <div id="zone-calendar" class="zone-calendar-container">
               <!-- Renderizado por InventoryUI.renderZoneCalendar -->
             </div>
 
-            <!-- Buscador de Artículos -->
-            <div class="search-box">
-              <div class="input-with-icon">
+            <!-- Buscador de Artículos + Escáner Móvil -->
+            <div class="search-box search-box-with-scanner">
+              <div class="input-with-icon search-input-flex">
                 <span class="material-symbols-outlined search-icon">search</span>
-                <input type="text" id="article-search-input" class="input-field" placeholder="Buscar por ID o Nombre...">
+                <input type="text" id="article-search-input" class="input-field" placeholder="Buscar por código o nombre...">
               </div>
+              <button type="button" class="btn btn-primary btn-scanner-trigger" id="btn-scan-barcode" title="Escanear código de barras o QR con la cámara">
+                <span class="material-symbols-outlined">qr_code_scanner</span>
+                <span class="scanner-btn-label">Escanear</span>
+              </button>
             </div>
 
             <!-- Barra de Filtros de Estado -->
@@ -200,6 +216,7 @@
                 <button class="filter-tab" data-filter="verificados">Verificados</button>
                 <button class="filter-tab" data-filter="faltantes">Faltantes</button>
                 <button class="filter-tab" data-filter="sobrantes">Sobrantes</button>
+                <button class="filter-tab filter-tab-recurrent" data-filter="reincidentes">🔥 Reincidentes</button>
               </nav>
             </div>
 

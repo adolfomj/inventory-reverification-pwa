@@ -47,8 +47,11 @@ const InventoryUI = (() => {
 
     // Elementos de la vista de Detalle de Zona
     statsContainer: document.getElementById('stats-container'),
+    btnShareSummary: document.getElementById('btn-share-summary'),
+    btnExportCsv: document.getElementById('btn-export-csv'),
+    btnScanBarcode: document.getElementById('btn-scan-barcode'),
     articleSearchInput: document.getElementById('article-search-input'),
-    filterTabs: document.querySelectorAll('.filter-tab'),
+    filterTabs: document.querySelectorAll('#filter-bar .filter-tab'),
     articlesListContainer: document.getElementById('articles-list-container'),
     fabAddArticle: document.getElementById('fab-add-article'),
     // Control de Sub-vistas (Artículos vs Novedades vs Logs)
@@ -453,6 +456,8 @@ const InventoryUI = (() => {
       filtered = filtered.filter(a => a.status === 'faltante');
     } else if (currentFilter === 'sobrantes') {
       filtered = filtered.filter(a => a.status === 'sobrante');
+    } else if (currentFilter === 'reincidentes') {
+      filtered = filtered.filter(a => Boolean(a.isRecurrent) || (a.discrepancyCount >= 2));
     }
 
     if (filtered.length === 0) {
@@ -565,7 +570,8 @@ const InventoryUI = (() => {
    */
   function _createArticleCard(art, callbacks = {}, isArchived = false) {
     const card = document.createElement('div');
-    card.className = `article-card surface-card ${art.verified ? 'is-verified' : ''} ${art.locked ? 'is-locked' : ''} ${isArchived ? 'is-archived' : ''}`;
+    const isRecurrent = Boolean(art.isRecurrent) || (art.discrepancyCount >= 2);
+    card.className = `article-card surface-card ${art.verified ? 'is-verified' : ''} ${art.locked ? 'is-locked' : ''} ${isArchived ? 'is-archived' : ''} ${isRecurrent ? 'is-recurrent' : ''}`;
     card.dataset.id = art.id;
 
     let statusBadgeClass = 'badge-correcto';
@@ -584,6 +590,7 @@ const InventoryUI = (() => {
 
     const createdUser = art.createdBy || '@admin';
     const updatedUser = art.updatedBy || art.createdBy || '@admin';
+    const needsPlanHighlight = art.status !== 'correcto' || isRecurrent;
 
     card.innerHTML = `
       <div class="article-card-header">
@@ -621,24 +628,44 @@ const InventoryUI = (() => {
         </div>
       </div>
 
+      ${isRecurrent ? `
+        <div class="recurrent-alert-banner">
+          <div class="recurrent-alert-text">
+            <span class="material-symbols-outlined text-icon">local_fire_department</span>
+            <span><strong>Problema Reincidente:</strong> ${art.discrepancyCount} registros con diferencia de stock.</span>
+          </div>
+          <button type="button" class="btn-recurrent-plan btn-open-plan-modal" data-id="${art.id}">
+            + Crear Plan
+          </button>
+        </div>
+      ` : ''}
+
       <div class="article-card-body">
         <div class="qty-grid">
           <div class="qty-box">
             <span class="qty-label">Cant. en Inventario</span>
             <span class="qty-value">${art.expectedQty}</span>
           </div>
-          <div class="qty-box">
+          <div class="qty-box qty-box-interactive">
             <span class="qty-label">Cant. Inventariada</span>
-            <div class="qty-input-wrapper">
+            <div class="qty-stepper-wrapper">
+              <button type="button" class="qty-step-btn btn-qty-minus" ${art.locked ? 'disabled' : ''} title="Restar 1" aria-label="Restar 1">−</button>
               <input 
                 type="number" 
+                inputmode="numeric"
                 class="qty-input input-found-qty" 
                 value="${art.foundQty}" 
                 min="0" 
                 ${art.locked ? 'disabled' : ''}
                 data-id="${art.id}"
               >
+              <button type="button" class="qty-step-btn btn-qty-plus" ${art.locked ? 'disabled' : ''} title="Sumar 1" aria-label="Sumar 1">+</button>
             </div>
+            ${!art.locked && art.foundQty !== art.expectedQty ? `
+              <button type="button" class="btn-qty-match" title="Igualar a cantidad en sistema (${art.expectedQty})">
+                = Igualar a ${art.expectedQty}
+              </button>
+            ` : ''}
           </div>
           <div class="qty-box">
             <span class="qty-label">Diferencia</span>
@@ -678,17 +705,25 @@ const InventoryUI = (() => {
       <div class="article-card-footer">
         <div class="article-actions-left">
           ${art.locked ? `
-            <button class="btn btn-sm btn-outlined btn-unlock-article" data-id="${art.id}" title="Desbloquear edición">
+            <button type="button" class="btn btn-sm btn-outlined btn-unlock-article" data-id="${art.id}" title="Desbloquear edición">
               <span class="material-symbols-outlined text-icon">lock_open</span>
               Desbloquear
             </button>
           ` : ''}
+          <button type="button" class="btn btn-sm ${needsPlanHighlight ? 'btn-plan-highlight' : 'btn-outlined'} btn-open-plan-modal" data-id="${art.id}" title="Crear o ver Plan de Acción para este artículo">
+            <span class="material-symbols-outlined text-icon">event_Task</span>
+            + Plan
+          </button>
+          <button type="button" class="btn btn-sm btn-outlined btn-article-history" data-id="${art.id}" title="Ver historial de conteos de este artículo">
+            <span class="material-symbols-outlined text-icon">history</span>
+            Historial${art.historyCount ? ` (${art.historyCount})` : ''}
+          </button>
         </div>
         <div class="article-actions-right">
-          <button class="icon-btn btn-edit-article" title="Editar Artículo" data-id="${art.id}">
+          <button type="button" class="icon-btn btn-edit-article" title="Editar Artículo" data-id="${art.id}">
             <span class="material-symbols-outlined">edit</span>
           </button>
-          <button class="icon-btn btn-delete-article" title="Eliminar Artículo" data-id="${art.id}">
+          <button type="button" class="icon-btn btn-delete-article" title="Eliminar Artículo" data-id="${art.id}">
             <span class="material-symbols-outlined">delete</span>
           </button>
         </div>
@@ -705,14 +740,59 @@ const InventoryUI = (() => {
       });
     }
 
-    // Input de cantidad encontrada
+    // Input de cantidad encontrada + Steppers táctiles (- / + / = Igualar)
     const inputFound = card.querySelector('.input-found-qty');
+    const diffEl = card.querySelector('.diff-value');
+    let stepDebounce = null;
+
+    const triggerQtyUpdate = (newVal) => {
+      const cleanVal = Math.max(0, parseInt(newVal, 10) || 0);
+      if (inputFound) inputFound.value = cleanVal;
+      if (diffEl) {
+        const d = cleanVal - (art.expectedQty || 0);
+        diffEl.textContent = d > 0 ? `+${d}` : `${d}`;
+        diffEl.className = `qty-value diff-value ${d > 0 ? 'diff-plus' : d < 0 ? 'diff-minus' : ''}`;
+      }
+      clearTimeout(stepDebounce);
+      stepDebounce = setTimeout(() => {
+        if (callbacks.onUpdateFoundQty) callbacks.onUpdateFoundQty(art.id, cleanVal);
+      }, 400);
+    };
+
     if (inputFound) {
       inputFound.addEventListener('change', (e) => {
         const val = parseInt(e.target.value, 10);
         if (!isNaN(val) && callbacks.onUpdateFoundQty) {
+          clearTimeout(stepDebounce);
           callbacks.onUpdateFoundQty(art.id, Math.max(0, val));
         }
+      });
+    }
+
+    const btnMinus = card.querySelector('.btn-qty-minus');
+    if (btnMinus) {
+      btnMinus.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const curr = parseInt(inputFound?.value, 10) || 0;
+        triggerQtyUpdate(Math.max(0, curr - 1));
+      });
+    }
+
+    const btnPlus = card.querySelector('.btn-qty-plus');
+    if (btnPlus) {
+      btnPlus.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const curr = parseInt(inputFound?.value, 10) || 0;
+        triggerQtyUpdate(curr + 1);
+      });
+    }
+
+    const btnMatch = card.querySelector('.btn-qty-match');
+    if (btnMatch) {
+      btnMatch.addEventListener('click', (e) => {
+        e.stopPropagation();
+        clearTimeout(stepDebounce);
+        if (callbacks.onUpdateFoundQty) callbacks.onUpdateFoundQty(art.id, art.expectedQty);
       });
     }
 
@@ -721,6 +801,23 @@ const InventoryUI = (() => {
     if (btnUnlock) {
       btnUnlock.addEventListener('click', () => {
         if (callbacks.onUnlockArticle) callbacks.onUnlockArticle(art);
+      });
+    }
+
+    // Botones de Plan de Acción
+    card.querySelectorAll('.btn-open-plan-modal').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (callbacks.onOpenPlanModal) callbacks.onOpenPlanModal(art);
+      });
+    });
+
+    // Botón de Historial del artículo
+    const btnHistory = card.querySelector('.btn-article-history');
+    if (btnHistory) {
+      btnHistory.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (callbacks.onViewArticleHistory) callbacks.onViewArticleHistory(art);
       });
     }
 
@@ -1168,20 +1265,45 @@ const InventoryUI = (() => {
       const color = palette[Math.abs(hashString(aid)) % palette.length];
 
       plansFor.slice(0, 3).forEach(p => {
+        const isDone = p.status === 'completado';
         const el = document.createElement('div');
-        el.className = 'article-plan-snippet';
-        el.style.borderLeftColor = color;
+        el.className = `article-plan-snippet ${isDone ? 'plan-is-done' : ''}`;
+        el.style.borderLeftColor = isDone ? '#10b981' : color;
         
-        const formattedStart = InventoryData.formatDate(p.startDate);
-        const formattedEnd = p.endDate ? InventoryData.formatDate(p.endDate) : '';
-        const dateRange = formattedEnd ? `${formattedStart} — ${formattedEnd}` : formattedStart;
+        const formattedStart = p.startDate || '-';
+        const formattedEnd = p.endDate ? p.endDate : '';
+        const dateRange = formattedEnd ? `${formattedStart} → ${formattedEnd}` : formattedStart;
         
         el.innerHTML = `
           <div class="ap-main">
+            <div class="ap-top-row">
+              <span class="ap-status-badge ${isDone ? 'ap-status-done' : 'ap-status-pending'}">
+                ${isDone ? '✓ Resuelto' : '⏳ Plan Activo'}
+              </span>
+              <span class="ap-date">📅 ${escapeHTML(dateRange)}</span>
+            </div>
             <div class="ap-desc">${escapeHTML(p.description)}</div>
-            <div class="ap-meta"><span class="ap-date">${escapeHTML(dateRange)}</span></div>
+          </div>
+          <div class="ap-actions">
+            <button type="button" class="icon-btn btn-sm btn-ap-toggle" title="${isDone ? 'Marcar como pendiente' : 'Marcar plan como resuelto/completado'}">
+              <span class="material-symbols-outlined">${isDone ? 'restart_alt' : 'check_circle'}</span>
+            </button>
+            <button type="button" class="icon-btn btn-sm btn-ap-del" title="Eliminar plan de acción">
+              <span class="material-symbols-outlined">delete</span>
+            </button>
           </div>
         `;
+
+        el.querySelector('.btn-ap-toggle')?.addEventListener('click', (e) => {
+          e.stopPropagation();
+          window.dispatchEvent(new CustomEvent('actionPlan:toggleStatus', { detail: { plan: p } }));
+        });
+
+        el.querySelector('.btn-ap-del')?.addEventListener('click', (e) => {
+          e.stopPropagation();
+          window.dispatchEvent(new CustomEvent('fullCalendar:deletePlan', { detail: { articleId: p.articleId, planId: p.id } }));
+        });
+
         wrap.appendChild(el);
       });
 

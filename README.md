@@ -1,466 +1,186 @@
-# 📊 Reverificación de Inventario por Zonas
+# 📊 Reverificación de Inventario por Zonas (PWA Mobile-First)
 
-Aplicación PWA (Progressive Web App) para reverificación de inventario por zonas de responsabilidad con almacenamiento en Supabase y sincronización en tiempo real.
-
----
-
-## 🎯 Características Principales
-
-- ✅ **Gestión de Zonas**: Crear, editar y eliminar zonas de responsabilidad
-- ✅ **Reverificación de Artículos**: Verificar y registrar artículos dentro de cada zona
-- ✅ **Planes de Acción**: Crear planes de acción por artículo con fechas
-- ✅ **Novedades/Tareas**: Registrar observaciones y tareas pendientes
-- ✅ **Almacenamiento en la Nube**: Sincronización con Supabase
-- ✅ **Funcionamiento Offline**: Service Worker para uso sin conexión
-- ✅ **Importar/Exportar**: Respaldar y restaurar datos en archivo JSON
-- ✅ **Modo Oscuro/Claro**: Tema adaptable a preferencias del usuario
-- ✅ **Interfaz Responsiva**: Optimizada para móvil, tablet y escritorio
-- ✅ **Instalable**: Se puede instalar como aplicación nativa
+> **🤖 CONTEXTO RÁPIDO PARA AGENTES DE IA (LEER PRIMERO ANTES DE EDITAR EL PROYECTO)**
+> Este documento contiene el estado real y actualizado de la arquitectura, esquema de base de datos en Supabase, contratos de módulos y reglas de negocio para **evitar leer todo el código fuente** en cada sesión.
+>
+> ### 🚨 Reglas Críticas del Proyecto
+> 1. **NO USAR GIT:** No ejecutar `git add`, `git commit` ni `git push` bajo ninguna circunstancia salvo petición explícita del usuario.
+> 2. **Sin Bundler / Sin ES Modules en navegador:** Los scripts se cargan de forma secuencial en `index.html` mediante etiquetas `<script>` clásicas y exponen globales en `window` (`window.InventoryData`, `window.InventoryStorage`, `window.InventoryUI`). **Nota:** `js/supabase.js` es un archivo huérfano legado que usa `import` y **NO** se carga en `index.html`; el cliente Supabase se inicializa inline en `index.html` (`window.supabaseClient`).
+> 3. **Cuidado con Columnas Inexistentes en Supabase (Error `PGRST204`):** No enviar columnas como `created_by`, `updated_by` o `verified_by` en `INSERT`/`UPDATE` de `zones`, `articles` o `verifications` a menos que el usuario confirme haber ejecutado un `ALTER TABLE` en Supabase. Toda la trazabilidad de autoría (`@usuario`) se persiste en la tabla `activity_logs`.
+> 4. **Service Worker (`sw.js`):** Siempre que modifiques archivos JS o CSS, incrementa `CACHE_NAME` (actualmente `inventory-pwa-v8`) en `sw.js` para evitar que el navegador sirva versiones en caché.
 
 ---
 
-## 📁 Estructura del Proyecto
+## 🎯 Propósito del Proyecto y Flujo de Negocio
 
-```
+Aplicación **Progressive Web App (PWA) diseñada primordialmente para dispositivos móviles (celular en mano en piso de venta o bodega)** que permite a auditores y líderes de zona:
+1. **Registrar rápidamente el estado físico del inventario:** Comparar la cantidad teórica del sistema (`expectedQty`) contra la cantidad física contada (`foundQty`), detectando al instante **Faltantes** (`difference < 0`), **Sobrantes** (`difference > 0`) o **Correctos** (`difference === 0`).
+2. **Dejar constancia auditable (Qué, Cuánto, Quién y Cuándo):** Cada conteo, verificación, desbloqueo, novedad o creación queda registrado con fecha/hora exacta y usuario responsable (`@username`), más evidencia fotográfica comprimida.
+3. **Identificar problemas repetitivos y ejecutar Planes de Acción:** Cuando un artículo presenta diferencias recurrentes o incidencias en la zona, se programan **Planes de Acción** con fechas de inicio/fin (visibles en la tarjeta del artículo y en el calendario de la zona) y **Novedades/Tareas** para revertir la causa raíz.
+
+---
+
+## 📁 Estructura del Proyecto y Mapa de Archivos
+
+```text
 inventory-reverification-pwa/
-├── index.html                 # HTML principal con meta tags PWA
-├── manifest.json             # Configuración PWA (nombre, iconos, colores)
-├── sw.js                     # Service Worker (cache, offline)
-│
+├── index.html          # Shell único SPA: Auth View + App Shell + Modales + Inicialización Supabase
+├── manifest.json       # Configuración PWA instalable en Android/iOS
+├── sw.js               # Service Worker (Network-First para HTML, Cache-First para assets, v7)
 ├── css/
-│   └── style.css            # Estilos CSS (variables, componentes, temas)
-│
+│   └── style.css       # Sistema de diseño Material 3, variables CSS, dark/light mode, responsive móvil
 ├── js/
-│   ├── supabase.js          # Inicialización cliente Supabase
-│   ├── data.js              # Lógica de datos y modelos (InventoryData)
-│   ├── storage.js           # Capa persistencia Supabase (InventoryStorage)
-│   ├── ui.js                # Componentes UI y DOM (InventoryUI)
-│   └── app.js               # Controlador principal y orquestación
-│
-└── README.md               # Este archivo
+│   ├── data.js         # window.InventoryData: Modelos puros, cálculos, fechas, compresión de fotos
+│   ├── storage.js      # window.InventoryStorage: CRUD Supabase + Auth + Logs + Fallbacks localStorage
+│   ├── ui.js           # window.InventoryUI: Renderizado DOM, tarjetas, carpetas >30d, calendario, modales
+│   ├── app.js          # Controlador principal: AppState, eventos, flujos de usuario
+│   └── supabase.js     # ⚠️ HUÉRFANO (No cargado en index.html, ignorar)
+└── README.md           # Documentación maestra y contexto para IAs
 ```
 
 ---
 
-## 🗄️ Base de Datos: Supabase
+## 🗄️ Esquema Real de Base de Datos (Supabase)
 
-### Tablas Actuales
+**URL Proyecto:** `https://rserzjanocqmgubdevow.supabase.co` (Configurado en `index.html`).
 
-#### 1. **zones** (Zonas de Responsabilidad)
-```sql
-CREATE TABLE zones (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name TEXT NOT NULL,
-  created_at TIMESTAMP DEFAULT NOW()
-);
-```
+> ⚠️ **IMPORTANTE PARA IAs:** Respeta estrictamente las columnas listadas debajo al construir payloads para `window.supabaseClient.from(...)`. Enviar propiedades extra provoca `HTTP 400 (PGRST204: Column not found in schema cache)`.
 
-**Campos:**
-- `id`: UUID única de la zona
-- `name`: Nombre/descripción de la zona
-- `created_at`: Fecha de creación
+### 1. Tabla `zones` (Zonas Comerciales / de Responsabilidad)
+| Columna | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `id` | `UUID` (PK) | Generado por Supabase (`default gen_random_uuid()`) |
+| `name` | `TEXT` | Nombre de la zona comercial (ej. "Running", "Fitness", "Bicicleta") |
+| `hidden` | `BOOLEAN` | `false` por defecto. Si es `true`, solo el rol `admin` puede verla |
+| `created_at` | `TIMESTAMPTZ` | Fecha de creación |
+| `updated_at` | `TIMESTAMPTZ` | Fecha de última modificación |
 
----
+### 2. Tabla `articles` (Artículos por Zona)
+*Constraint único:* `UNIQUE (zone_id, article_code)` — usado en `.upsert(..., { onConflict: 'zone_id,article_code' })`.
 
-#### 2. **articles** (Artículos)
-```sql
-CREATE TABLE articles (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  zone_id UUID NOT NULL REFERENCES zones(id) ON DELETE CASCADE,
-  article_code TEXT NOT NULL,
-  name TEXT NOT NULL,
-  inventory_quantity INTEGER DEFAULT 0,
-  image_url TEXT,
-  comment TEXT,
-  created_at TIMESTAMP DEFAULT NOW()
-);
-```
+| Columna | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `id` | `UUID` (PK) | ID interno en base de datos (`_dbId` en el frontend) |
+| `zone_id` | `UUID` (FK) | Referencia a `zones(id) ON DELETE CASCADE` |
+| `article_code` | `TEXT` | Código visible del artículo (`id` en el frontend, ej. código de barras/ítem) |
+| `name` | `TEXT` | Nombre descriptivo del artículo |
+| `inventory_quantity` | `INTEGER` | Cantidad teórica en sistema (`expectedQty` en frontend) |
+| `image_url` | `TEXT` | Imagen comprimida en Base64 (`data:image/jpeg;base64,...`) o URL |
+| `comment` | `TEXT` | Observación sobre ubicación, empaque o causa de diferencia |
+| `created_at` | `TIMESTAMPTZ` | Fecha de creación |
+| `updated_at` | `TIMESTAMPTZ` | Fecha de última edición |
 
-**Campos:**
-- `id`: UUID única del registro
-- `zone_id`: Relación con la zona
-- `article_code`: ID/código del artículo (ej: "ART-101")
-- `name`: Nombre del artículo
-- `inventory_quantity`: Cantidad esperada en inventario
-- `image_url`: URL de imagen del artículo (opcional)
-- `comment`: Comentario o nota
-- `created_at`: Fecha de creación
+### 3. Tabla `verifications` (Estado de Conteo y Verificación)
+*Constraint único:* `article_id` — usado en `.upsert(..., { onConflict: 'article_id' })`.
 
----
+| Columna | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `article_id` | `UUID` (PK/FK) | Referencia a `articles(id) ON DELETE CASCADE` |
+| `found_quantity` | `INTEGER` | Cantidad física encontrada en reverificación (`foundQty`) |
+| `verified` | `BOOLEAN` | Si ya fue verificado (`true` bloquea la edición del input numérico) |
+| `verified_at` | `TIMESTAMPTZ` | Fecha/hora exacta en que se marcó como verificado (`null` si se desbloquea) |
+| `created_at` | `TIMESTAMPTZ` | Fecha de creación del registro |
+| `updated_at` | `TIMESTAMPTZ` | Última actualización |
 
-#### 3. **verifications** (Verificaciones/Reverificaciones)
-```sql
-CREATE TABLE verifications (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  article_id UUID NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-  found_quantity INTEGER DEFAULT 0,
-  verified BOOLEAN DEFAULT FALSE,
-  verified_at TIMESTAMP,
-  created_at TIMESTAMP DEFAULT NOW()
-);
-```
+### 4. Tabla `activity_logs` (Historial de Auditoría: Quién, Qué y Cuándo)
+Tiene fallback automático a `localStorage` (`inventory_activity_logs_v1`).
 
-**Campos:**
-- `id`: UUID única del registro
-- `article_id`: Relación con el artículo
-- `found_quantity`: Cantidad encontrada en la reverificación
-- `verified`: Si fue verificado o no
-- `verified_at`: Fecha de verificación
-- `created_at`: Fecha de creación
+| Columna | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `id` | `UUID` (PK) | Identificador del evento |
+| `zone_id` | `UUID` (Nullable)| Zona donde ocurrió la acción (`null` para login/logout/import) |
+| `user_email` | `TEXT` | Tag del usuario que ejecutó la acción (ej. `@admin`, `@auditor1`) |
+| `action` | `TEXT` | Ej: `save_article`, `verify_article`, `unlock_article`, `hide_zone`, `login` |
+| `entity_type` | `TEXT` | `'zone'`, `'article'`, `'novelty'`, `'plan'`, `'auth'`, `'system'` |
+| `entity_name` | `TEXT` | Nombre o código del elemento afectado |
+| `details` | `TEXT` | Resumen legible del cambio (ej. `"Artículo 8541234: Sistema=15, Encontrado=13 (faltante)"`) |
+| `created_at` | `TIMESTAMPTZ` | Fecha/hora exacta del evento |
+
+### 5. Tablas con Fallback Híbrido (Supabase + `localStorage`)
+* **`app_users` / `users`**: Autenticación personalizada con columnas flexibles (`username`/`usuario`, `password`/`password_hash`/`clave`, `full_name`/`nombre`, `role`: `'admin'` | `'auditor'`). Si la tabla no responde, `storage.js` hace fallback a Supabase Native Auth (`@decathlon.com`) y finalmente a credenciales locales de emergencia (`admin`/`admin123` y `auditor1`/`123456`).
+* **`novelties`**: Tareas u observaciones generales de la zona (`id`, `zone_id`, `text`, `confirmed`, `confirmed_at`, `created_at`, `updated_at`). Fallback en `localStorage` (`inventory_novelties_v1`).
+* **`action_plans`**: Planes de acción por artículo (`id`, `zone_id`, `article_code`, `description`, `start_date`, `end_date`, `created_at`, `updated_at`). Fallback en `localStorage` (`inventory_action_plans_v1`).
 
 ---
 
-#### 4. **action_plans** (Planes de Acción) ⚠️ EN DESARROLLO
+## 🔐 Roles de Usuario y Reglas de Visibilidad
 
-⚠️ **ESTADO ACTUAL**: Los planes de acción están guardados en **localStorage** (no en Supabase)
-
-**Necesita ser migrado a tabla Supabase:**
-```sql
-CREATE TABLE action_plans (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  zone_id UUID NOT NULL REFERENCES zones(id) ON DELETE CASCADE,
-  article_id UUID NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-  description TEXT NOT NULL,
-  start_date DATE NOT NULL,
-  end_date DATE,
-  status TEXT DEFAULT 'pendiente', -- 'pendiente', 'en_progreso', 'completado'
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
-);
-```
+| Funcionalidad | Rol `admin` | Rol `auditor` (Usuario normal) |
+| :--- | :---: | :---: |
+| Ver zonas activas (`hidden = false`) | ✅ | ✅ |
+| Ocultar / Mostrar zonas comerciales (`hidden = true`) | ✅ (Botón ojo + Pestañas Todas/Activas/Ocultas) | ❌ (Invisibles para el auditor) |
+| Botón `⚡` Desplegable "Últimos Cambios" (Header) | ✅ (Ve cambios + inicios/cierres de sesión) | ✅ (Ve **solo** cambios de inventario; **sin** eventos `login`/`logout`) |
+| Sub-vista "Historial / Logs" completos dentro de Zona | ✅ | ❌ (Pestaña oculta) |
+| Crear/Editar/Verificar/Desbloquear artículos y novedades | ✅ | ✅ |
 
 ---
 
-## 📦 Módulos JavaScript
+## 🧩 Contratos de Módulos JavaScript
 
-### 1. **InventoryData** (`data.js`)
-Lógica de modelos y cálculos de datos.
+### 1. `window.InventoryData` (`js/data.js`)
+Funciones puras sin efectos secundarios:
+* `calculateDifference(expectedQty, foundQty)` → `found - expected`
+* `determineStatus(difference)` → `'correcto' | 'sobrante' | 'faltante'`
+* `calculateZoneStats(articles)` → `{ total, pending, verified, faltantes, sobrantes, correctos, percentageVerified }`
+* `isOlderThanOneMonth(dateInput)` → `boolean` (Usado para enviar artículos > 30 días a la **Carpeta de Archivo** dentro de cada zona).
+* `groupItemsByDate(items, dateAccessor)` → Agrupa cronológicamente en `"Hoy — ..."`, `"Ayer — ..."`, `"Esta semana (...)"`, `"Este mes (...)"`, etc.
+* `compressImage(file, maxWidth=500, maxHeight=500)` → Redimensiona en `<canvas>` y comprime a JPEG `0.75` Base64.
 
-**Funciones públicas:**
-```javascript
-InventoryData.createZone(name)                    // Crea una zona
-InventoryData.createArticle({...})               // Crea un artículo con cálculos
-InventoryData.createNovelty(text)                // Crea una novedad/tarea
-InventoryData.calculateDifference(expected, found)
-InventoryData.determineStatus(difference)        // 'correcto', 'sobrante', 'faltante'
-InventoryData.calculateZoneStats(articles)       // Estadísticas por zona
-InventoryData.formatDate(dateInput)              // Formatea fechas
-InventoryData.generateUniqueId()                 // ID único tipo: ID-timestamp-random
-InventoryData.compressImage(file, maxW, maxH)   // Comprime imagen a Base64
-```
+### 2. `window.InventoryStorage` (`js/storage.js`)
+* **Auth:** `getCurrentUser()`, `signIn(username, password)`, `signOut()`
+* **Logs:** `logActivity({ zoneId, action, entityType, entityName, details })`, `getActivityLogs(zoneId)`
+* **Zonas:** `getAllZones()`, `getZoneById(zoneId)`, `saveZone(zoneData)`, `deleteZone(zoneId)`, `toggleZoneVisibility(zoneId, hide)`
+* **Artículos:** `saveArticle(zoneId, articleData)`, `deleteArticle(zoneId, articleId)`, `toggleArticleVerification(zoneId, articleId, isVerified)`, `unlockArticle(zoneId, articleId)`, `getArticleHistory(zoneId, articleId, articleName)`
+* **Novedades:** `getNoveltiesForZone(zoneId)`, `saveNovelty(zoneId, noveltyData)`, `deleteNovelty(zoneId, noveltyId)`, `toggleNoveltyConfirmation(zoneId, noveltyId, isConfirmed)`
+* **Planes de Acción:** `getActionPlansForZone(zoneId)`, `saveActionPlan(zoneId, articleId, plan)`, `toggleActionPlanStatus(zoneId, plan)`, `deleteActionPlan(zoneId, articleId, planId)`
+* **Respaldo JSON:** `exportZoneToJSON(zoneId)`, `exportAllToJSON()`, `importFromJSON(jsonString)`
 
----
-
-### 2. **InventoryStorage** (`storage.js`)
-Capa de persistencia con Supabase.
-
-**Funciones Públicas:**
-```javascript
-// Zonas
-await InventoryStorage.getAllZones()             // Trae todas las zonas
-await InventoryStorage.getZoneById(zoneId)       // Una zona con artículos
-await InventoryStorage.saveZone(zoneData)        // Crear/actualizar zona
-await InventoryStorage.deleteZone(zoneId)        // Eliminar zona
-
-// Artículos
-await InventoryStorage.saveArticle(zoneId, articleData)    // Guardar artículo
-await InventoryStorage.deleteArticle(zoneId, articleId)    // Eliminar artículo
-
-// Verificaciones
-await InventoryStorage.toggleArticleVerification(zoneId, articleId, isVerified)
-await InventoryStorage.unlockArticle(zoneId, articleId)
-
-// Planes de Acción (actualmente en localStorage)
-await InventoryStorage.saveActionPlan(zoneId, articleId, plan)
-await InventoryStorage.getActionPlansForZone(zoneId)
-await InventoryStorage.getActionPlansForArticle(zoneId, articleId)
-await InventoryStorage.updateActionPlan(zoneId, articleId, plan)
-await InventoryStorage.deleteActionPlan(zoneId, articleId, planId)
-
-// Import/Export
-await InventoryStorage.exportAllToJSON()         // Exporta todo a JSON
-await InventoryStorage.importFromJSON(jsonStr)   // Importa desde JSON
-await InventoryStorage.exportZoneToJSON(zoneId)  // Exporta zona específica
-```
+### 3. `window.InventoryUI` (`js/ui.js`)
+* `renderZonesList(zones, searchQuery, callbacks, isAdmin, zoneFilter)`
+* `renderArticlesList(articles, currentFilter, searchQuery, callbacks)` — **4 parámetros exactos**. Separa artículos recientes (`<= 30 días`) agrupados por fecha y empaqueta los antiguos (`> 30 días`) dentro de un acordeón plegable `.archive-folder-card` dentro de la zona.
+* `renderActivitySidebarFeed(logs, isAdmin)` — Renderiza el popover `#activity-sidebar` al pulsar `#btn-toggle-activity`.
+* `renderZoneCalendar(plans)`, `injectArticlePlans(plans)`, `showFullCalendar(plans)`
 
 ---
 
-### 3. **InventoryUI** (`ui.js`)
-Componentes de interfaz de usuario y renderizado del DOM.
+## 🚀 Propuestas de Mejora y Hoja de Ruta (Enfoque Mobile-First, Auditoría y Planes de Acción)
 
-**Funciones Principales:**
-```javascript
-// Vistas principales
-InventoryUI.showZonesView()
-InventoryUI.showZoneDetailView(zoneId)
+Tras auditar el código actual frente al objetivo del proyecto (*uso cómodo en celular para registrar faltantes/sobrantes, dejar constancia de qué/cuánto/cuándo y generar planes de acción ante problemas repetitivos*), se identificaron las siguientes mejoras prioritarias:
 
-// Renderizado
-InventoryUI.renderZonesList(zones, searchQuery, callbacks)
-InventoryUI.renderArticlesList(articles, filter, searchQuery, callbacks)
-InventoryUI.renderZoneCalendar(plans)              // Calendario de planes
-InventoryUI.injectArticlePlans(plans)              // Inyecta planes en tarjetas
+### 🔴 Prioridad 1: Bugs Funcionales y Brechas en Planes de Acción (Quick Wins)
+1. **Restaurar el botón/formulario para crear Planes de Acción desde el Artículo:**
+   * *Diagnóstico:* `storage.js` tiene `saveActionPlan()` y `ui.js` tiene `renderZoneCalendar()` e `injectArticlePlans()`, pero en `app.js` y en las tarjetas de artículo **actualmente no hay botón ni sección en el modal para crear un Plan de Acción nuevo**.
+   * *Solución:* Añadir un botón rápido `📋 + Plan de Acción` directamente en el pie de cada tarjeta de artículo (especialmente visible cuando el estado es `faltante` o `sobrante`) que abra un modal ligero con: Descripción de la acción correctiva, Fecha inicio y Fecha compromiso.
+2. **Atribución exacta de quién creó/modificó cada artículo desde `activity_logs`:**
+   * *Diagnóstico:* Como las tablas `zones` y `articles` no tienen columnas `created_by`/`updated_by`, `rowToZone` y `rowsToArticles` muestran `@admin` o `@auditor1` por defecto al recargar.
+   * *Solución:* Cruzar en memoria los registros de `activity_logs` al cargar la zona (o añadir las columnas en Supabase mediante un script SQL opcional) para que cada artículo muestre siempre el `@usuario` real que hizo el último conteo y a qué hora exacta.
 
-// Modales y alertas
-InventoryUI.showToast(message, type)               // Notificación flotante
-InventoryUI.showModal(title, contentHTML, buttons) // Modal genérico
-InventoryUI.showImageModal(imageUrl, title)        // Visor de imagen
+### 📱 Prioridad 2: Ergonomía Mobile-First (Uso a una sola mano en bodega/tienda)
+3. **Botones `+1` y `-1` (Steppers táctiles) en la tarjeta del artículo:**
+   * *Por qué:* En el celular, tocar un `<input type="number">`, borrar el número con el teclado virtual y escribir otro es lento e incómodo mientras se sostiene mercancía.
+   * *Mejora:* Agregar botones grandes `-` y `+` a los lados del campo `Cant. Inventariada` con guardado automático (debounce de 500ms) y botón rápido `= Igualar a Sistema` para confirmar en un toque cuando el stock está completo.
+4. **Escáner de Código de Barras / QR con la cámara del celular:**
+   * *Por qué:* Escribir códigos de 7-13 dígitos manualmente en el buscador o al crear un artículo genera errores de digitación.
+   * *Mejora:* Integrar la API nativa `BarcodeDetector` o `html5-qrcode` en un botón `📷 Escanear` junto a la barra de búsqueda y en el modal de nuevo artículo. Al escanear un código:
+     * Si el artículo ya existe en la zona, hace scroll directo a su tarjeta y enfoca la cantidad.
+     * Si no existe, abre el modal de "Nuevo Artículo" con el código ya rellenado.
+5. **Dictado por Voz (Web Speech API) para Comentarios y Novedades:**
+   * *Por qué:* Escribir observaciones largas en pantalla táctil detiene el ritmo del conteo.
+   * *Mejora:* Añadir un ícono de micrófono `🎤` en el campo de comentarios del artículo y en Novedades para dictar rápidamente *"Faltan 2 unidades, caja rota en altillo B"*.
 
-// Elementos del DOM
-InventoryUI.elements                               // Objeto con referencias a elementos
-```
+### 🔁 Prioridad 3: Detección de Reincidencias e Historial de Conteos ("Qué, Cuánto y Cuándo")
+6. **Historial de Reverificaciones por Artículo (Línea de tiempo del ítem):**
+   * *Problema actual:* `verifications` sobrescribe `found_quantity` en cada conteo (`upsert` por `article_id`), por lo que en la tarjeta solo se ve la foto del último conteo y se pierde la vista rápida de cuántas veces ha fallado ese artículo en el pasado.
+   * *Mejora:* Añadir un botón `🕒 Historial (N)` en la tarjeta del artículo que consulte en `activity_logs` todos los eventos `save_article` / `verify_article` de ese código y muestre una mini-tabla:
+     * `07/11 14:20 — @auditor1: Sistema 15 | Encontrado 12 (Faltante -3)`
+     * `01/11 09:10 — @auditor2: Sistema 15 | Encontrado 13 (Faltante -2)`
+7. **Alerta Automática de "Artículo Reincidente" + Sugerencia de Plan de Acción:**
+   * *Mejora:* Si un artículo acumula **2 o más registros consecutivos con estado `faltante` o `sobrante`** en el historial, mostrar una insignia roja/naranja `🔥 Reincidente (3 veces con diferencia)` en su tarjeta y sugerir automáticamente: *"Este artículo ha presentado diferencias repetitivas. ¿Deseas generar un Plan de Acción para revertir el problema?"*.
+8. **Motivos Estandarizados de Diferencia (Tags rápidos en un toque):**
+   * *Mejora:* Cuando `foundQty !== expectedQty`, mostrar chips seleccionables con un toque en el celular: `[📦 Mal ubicado]`, `[🏷️ Error de recepción]`, `[💔 Merma / Dañado]`, `[🛒 Posible hurto]`, `[🔄 Sin etiquetar]`. Esto permite estadificar por qué ocurren los faltantes/sobrantes sin obligar a escribir texto libre.
 
----
-
-### 4. **App** (`app.js`)
-Controlador principal que orquesta todo.
-
-**Responsabilidades:**
-- Inicializar la aplicación y registro de Service Worker
-- Gestión de estado global (`AppState`)
-- Manejo de eventos de UI
-- Bindings de botones y formularios
-- Modales de zona, artículo, planes de acción
-- Lógica de búsqueda y filtrado
-- Manejo de temas (claro/oscuro)
-- Import/Export
-
----
-
-## 🎨 Estructura de Datos en la App
-
-### Objeto Zona
-```javascript
-{
-  id: "ZONE-123",
-  name: "Zona A - Almacén",
-  createdAt: "2026-08-13T10:30:00Z",
-  articles: [ /* Array de artículos */ ],
-  novelties: [ /* Array de novedades */ ]
-}
-```
-
-### Objeto Artículo
-```javascript
-{
-  id: "ART-101",                    // Código del artículo
-  _dbId: "uuid-...",               // UUID real en BD (para upserts)
-  zoneId: "ZONE-123",
-  name: "Monitor LED 24\"",
-  expectedQty: 15,                 // Cantidad inventariada original
-  foundQty: 14,                    // Cantidad encontrada en reverificación
-  difference: -1,                  // foundQty - expectedQty
-  status: "faltante",              // 'correcto' | 'sobrante' | 'faltante'
-  verified: true,                  // Si fue verificado
-  verifiedAt: "2026-08-13T11:45:00Z", // Cuándo se verificó
-  locked: true,                    // Bloqueado si verified
-  image: "data:image/jpeg;base64,...", // Imagen comprimida en Base64
-  comment: "Nota sobre el artículo"
-}
-```
-
-### Objeto Plan de Acción
-```javascript
-{
-  id: "PLAN-456",
-  zoneId: "ZONE-123",
-  articleId: "ART-101",
-  description: "Realizar reorden de stock",
-  startDate: "2026-08-13",
-  endDate: "2026-08-20",
-  status: "pendiente",             // 'pendiente' | 'en_progreso' | 'completado'
-  createdAt: "2026-08-13T10:00:00Z"
-}
-```
-
-### Objeto Novedad/Tarea
-```javascript
-{
-  id: "NOV-789",
-  text: "Revisar sistema de cajas",
-  confirmed: false,
-  confirmedAt: null,
-  createdAt: "2026-08-13T10:00:00Z"
-}
-```
-
----
-
-## 🔄 Flujo de Datos
-
-```
-┌─────────────────────────────────┐
-│  UI (app.js + ui.js + HTML)    │  ← Usuario interactúa
-└────────┬────────────────────────┘
-         │
-         ↓
-┌─────────────────────────────────┐
-│   InventoryData (data.js)       │  ← Cálculos y modelos
-└────────┬────────────────────────┘
-         │
-         ↓
-┌─────────────────────────────────┐
-│ InventoryStorage (storage.js)  │  ← Persistencia
-└────────┬────────────────────────┘
-         │
-    ┌────┴────┐
-    ↓         ↓
- Supabase  localStorage
-  (Zones,    (Plans)
-  Articles,
-  Verif.)
-```
-
----
-
-## 🚀 Instalación y Configuración
-
-### 1. Clonar el Repositorio
-```bash
-git clone <repo-url>
-cd inventory-reverification-pwa
-```
-
-### 2. Configurar Supabase
-
-Crear las 3 tablas en Supabase (o importar SQL):
-
-```sql
--- 1. Zonas
-CREATE TABLE zones (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name TEXT NOT NULL,
-  created_at TIMESTAMP DEFAULT NOW()
-);
-
--- 2. Artículos
-CREATE TABLE articles (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  zone_id UUID NOT NULL REFERENCES zones(id) ON DELETE CASCADE,
-  article_code TEXT NOT NULL,
-  name TEXT NOT NULL,
-  inventory_quantity INTEGER DEFAULT 0,
-  image_url TEXT,
-  comment TEXT,
-  created_at TIMESTAMP DEFAULT NOW()
-);
-
--- 3. Verificaciones
-CREATE TABLE verifications (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  article_id UUID NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-  found_quantity INTEGER DEFAULT 0,
-  verified BOOLEAN DEFAULT FALSE,
-  verified_at TIMESTAMP,
-  created_at TIMESTAMP DEFAULT NOW()
-);
-```
-
-### 3. Configurar Credenciales
-
-En `index.html`, configurar:
-```html
-<script>
-  window.SUPABASE_URL = 'https://tu-proyecto.supabase.co';
-  window.SUPABASE_ANON_KEY = 'tu_anon_key_aqui';
-</script>
-```
-
-### 4. Servir Localmente
-
-```bash
-# Python 3
-python -m http.server 8000
-
-# Node.js
-npx http-server -p 8000
-```
-
-Acceder a: `https://localhost:8000`
-
-### 5. Instalar PWA
-
-En navegadores modernos (Chrome, Edge):
-- Buscar el ícono "Instalar app" en la barra de direcciones
-- O abrir menú → "Instalar en este dispositivo"
-
----
-
-## 🎨 Personalización
-
-### Variables CSS Principales
-```css
---primary-color: #6366f1          /* Color principal */
---text-main: #1f2937             /* Texto principal */
---text-muted: #9ca3af            /* Texto secundario */
---surface-card: #1f2937           /* Fondo tarjetas */
---border-color: #374151           /* Bordes */
-```
-
-Ver `css/style.css` para todas las variables.
-
----
-
-## ⚠️ TODO - Próximas Mejoras
-
-### 🔴 URGENTE: Migrar Planes de Acción a Supabase
-- [ ] Crear tabla `action_plans` en Supabase
-- [ ] Actualizar queries en `InventoryStorage`
-- [ ] Migrar datos de localStorage a Supabase
-- [ ] Sincronizar en tiempo real
-
-**Query necesario (para ChatGPT/Gemini):**
-```sql
--- Crear tabla action_plans en Supabase
-CREATE TABLE action_plans (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  zone_id UUID NOT NULL REFERENCES zones(id) ON DELETE CASCADE,
-  article_id UUID NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-  description TEXT NOT NULL,
-  start_date DATE NOT NULL,
-  end_date DATE,
-  status TEXT DEFAULT 'pendiente',
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
-);
-```
-
-### Otros TODOs
-- [ ] Agregar autenticación de usuarios
-- [ ] Historial de cambios (audit log)
-- [ ] Reportes y estadísticas
-- [ ] Notificaciones push
-- [ ] Integración con códigos de barras/QR
-- [ ] Soporte multi-idioma
-
----
-
-## 📱 Compatibilidad
-
-| Navegador | Versión | Estado |
-|-----------|---------|--------|
-| Chrome    | 51+     | ✅ Full Support |
-| Firefox   | 44+     | ✅ Full Support |
-| Safari    | 11.1+   | ✅ Full Support |
-| Edge      | 17+     | ✅ Full Support |
-| IE 11     | —       | ❌ No soportado |
-
----
-
-## 🔒 Seguridad y Privacidad
-
-- ✅ Datos sincronizados con Supabase (encriptado en tránsito)
-- ✅ Funciona offline con Service Worker
-- ✅ Sin recopilación de datos personales
-- ✅ Autorización vía Supabase (si está configurada)
-
----
-
-## 📄 Licencia
-
-MIT License - Ver archivo LICENSE para detalles.
-
----
-
-## 📞 Soporte y Contacto
-
-Para problemas, sugerencias o preguntas, contactar al equipo de desarrollo.
+### 📊 Prioridad 4: Seguimiento Efectivo de Planes de Acción
+9. **Estados de Plan de Acción (`Pendiente` → `En Progreso` → `Efectivo / Resuelto`):**
+   * Permitir marcar un Plan de Acción como completado y vincular una **Reverificación de Control**: cuando vence la `end_date` del plan de acción, resaltar el artículo para verificar si la medida adoptada realmente revirtió el faltante/sobrante.
+10. **Exportación a CSV / WhatsApp Resumen de Turno:**
+    * Un botón para compartir por WhatsApp o descargar en CSV el resumen del conteo del día (ej. *"Zona Running: 42 verificados, 3 faltantes críticos, 2 planes de acción creados hoy por @auditor1"*).

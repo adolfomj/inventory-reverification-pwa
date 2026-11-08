@@ -2039,3 +2039,464 @@ body {
 }
 
 
+
+
+/* ==========================================================================
+   MEJORAS MOBILE-FIRST: STEPPERS, REINCIDENCIAS, PLANES, ESCÁNER Y DICTADO
+   ========================================================================== */
+
+/* Acciones rápidas de Zona (WhatsApp / Excel CSV) */
+.zone-quick-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.zone-action-chip {
+  flex: 1;
+  min-width: 145px;
+  justify-content: center;
+  font-weight: 600;
+}
+
+/* Buscador con botón de escáner de cámara integrado */
+.search-box-with-scanner {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.search-input-flex {
+  flex: 1;
+}
+
+.btn-scanner-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Alerta de Artículo Reincidente */
+.article-card.is-recurrent {
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+.recurrent-alert-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background-color: var(--status-danger-bg);
+  color: var(--status-danger);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: var(--radius-md);
+  padding: 7px 10px;
+  margin: 8px 0 4px;
+  font-size: 0.78rem;
+}
+
+.recurrent-alert-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.3;
+}
+
+.recurrent-alert-text .text-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.btn-recurrent-plan {
+  background-color: var(--status-danger);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+  font-size: 0.73rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Steppers táctiles (- / +) y botón Igualar en Tarjeta */
+.qty-box-interactive {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.qty-stepper-wrapper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background-color: var(--bg-color);
+}
+
+.qty-step-btn {
+  width: 34px;
+  height: 34px;
+  border: none;
+  background-color: var(--surface-hover);
+  color: var(--text-main);
+  font-size: 1.15rem;
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  touch-action: manipulation;
+  transition: background-color 0.15s ease;
+}
+
+.qty-step-btn:active:not(:disabled) {
+  background-color: var(--primary-color);
+  color: #fff;
+}
+
+.qty-step-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.qty-stepper-wrapper .qty-input {
+  width: 54px;
+  height: 34px;
+  border: none;
+  border-left: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  border-radius: 0;
+  text-align: center;
+  font-weight: 700;
+  font-size: 0.98rem;
+  padding: 0 4px;
+}
+
+.btn-qty-match {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--primary-color);
+  background-color: var(--primary-light);
+  border: 1px solid var(--primary-color);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  touch-action: manipulation;
+}
+
+/* Botón + Plan resaltado cuando hay diferencia */
+.btn-plan-highlight {
+  background-color: var(--status-warning-bg);
+  color: var(--status-warning);
+  border: 1px solid var(--status-warning);
+  font-weight: 700;
+}
+
+/* Snippets de Planes de Acción en Tarjeta */
+.article-plan-snippet {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-left-width: 4px;
+  margin-top: 6px;
+}
+
+.article-plan-snippet.plan-is-done {
+  opacity: 0.75;
+}
+
+.article-plan-snippet.plan-is-done .ap-desc {
+  text-decoration: line-through;
+}
+
+.ap-top-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 3px;
+}
+
+.ap-status-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+}
+
+.ap-status-done {
+  background-color: var(--status-success-bg);
+  color: var(--status-success);
+}
+
+.ap-status-pending {
+  background-color: var(--status-warning-bg);
+  color: var(--status-warning);
+}
+
+.ap-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* Dictado por voz y Chips rápidos en Modales */
+.label-with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.btn-voice-dictate {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--primary-color);
+  background-color: var(--primary-light);
+  color: var(--primary-color);
+  cursor: pointer;
+}
+
+.btn-voice-dictate.is-recording {
+  background-color: var(--status-danger);
+  color: #fff;
+  border-color: var(--status-danger);
+  animation: pulse 1s infinite;
+}
+
+.quick-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.quick-tag-chip {
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 5px 9px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.quick-tag-chip:hover,
+.quick-tag-chip.active {
+  border-color: var(--primary-color);
+  background-color: var(--primary-light);
+  color: var(--primary-color);
+}
+
+.input-with-btn-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.input-with-btn-row .input-field {
+  flex: 1;
+}
+
+/* Modal de Escáner de Cámara */
+.scanner-modal-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.scanner-viewport {
+  position: relative;
+  width: 100%;
+  height: 220px;
+  background-color: #000;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scanner-viewport video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scanner-laser {
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  height: 2px;
+  background-color: #ef4444;
+  box-shadow: 0 0 8px 2px rgba(239, 68, 68, 0.8);
+  animation: scanLaser 2s ease-in-out infinite;
+}
+
+@keyframes scanLaser {
+  0%, 100% { top: 20%; }
+  50% { top: 80%; }
+}
+
+.scanner-status-msg {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.scanner-manual-box {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+/* Modal de Planes y Línea de Tiempo de Historial por Artículo */
+.plan-modal-summary {
+  background-color: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 0.84rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recurrent-mini-tag {
+  color: var(--status-danger);
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.existing-plans-section {
+  margin-bottom: 14px;
+}
+
+.section-Label-sm {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.existing-plans-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.existing-plan-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-color);
+}
+
+.existing-plan-row.is-done {
+  opacity: 0.7;
+}
+
+.ep-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.82rem;
+}
+
+.ep-dates {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+.ep-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.history-timeline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.history-timeline-item {
+  padding: 9px 11px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--primary-color);
+  background-color: var(--bg-color);
+  font-size: 0.82rem;
+}
+
+.history-timeline-item.history-item-alert {
+  border-left-color: var(--status-danger);
+}
+
+.ht-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.ht-user {
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.ht-body {
+  color: var(--text-main);
+  line-height: 1.35;
+}
+
+@media (max-width: 480px) {
+  .scanner-btn-label {
+    display: none;
+  }
+  .article-actions-left {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+}
