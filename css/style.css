@@ -945,13 +945,15 @@ body {
 }
 .article-plan-snippet {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.01));
   color: var(--text-main);
-  font-size: 0.9rem;
+  font-size: 0.88rem;
   border: 1px solid rgba(99,102,241,0.2);
   border-left: 5px solid var(--primary-color);
 }
@@ -2491,12 +2493,491 @@ body {
   line-height: 1.35;
 }
 
-@media (max-width: 480px) {
-  .scanner-btn-label {
+/* Cabecera compacta de Planes de Acción en Zona */
+.zc-header-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.zc-cal-icon {
+  font-size: 18px;
+  color: var(--primary-color);
+}
+
+.zc-count-pill {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  background-color: var(--surface-hover);
+  color: var(--text-secondary);
+}
+
+.zc-count-pill.has-active {
+  background-color: var(--status-warning-bg);
+  color: var(--status-warning);
+}
+
+.zc-chevron-mobile {
+  display: none;
+  font-size: 18px;
+  color: var(--text-secondary);
+  transition: transform 0.2s ease;
+}
+
+/* ==========================================================================
+   OPTIMIZACIÓN VISUAL Y ERGONÓMICA MÓVIL (SOLO CELULARES <= 640px)
+   El diseño de PC (> 640px) se mantiene intacto.
+   ========================================================================== */
+@media (max-width: 640px) {
+  /* 1. Contenedor Principal con espacio inferior para que el FAB (+) nunca tape tarjetas */
+  .app-container {
+    padding: 10px 10px 92px;
+  }
+
+  /* 2. Cabecera Superior (App Header) limpia y sin desbordes */
+  .app-header {
+    padding: 8px 10px;
+  }
+
+  .header-content {
+    gap: 6px;
+  }
+
+  .header-left {
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .header-titles {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .header-titles h1 {
+    font-size: 0.98rem;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .header-subtitle {
+    font-size: 0.68rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+    max-width: 100%;
+  }
+
+  .header-right {
+    gap: 2px;
+    flex-shrink: 0;
+  }
+
+  /* En celular ocultamos Exportar/Importar del header superior porque ya están en la pantalla principal */
+  #btn-global-export,
+  #btn-global-import {
+    display: none !important;
+  }
+
+  .user-chip {
+    padding: 3px 7px;
+    font-size: 0.72rem;
+    max-width: 96px;
+  }
+
+  .user-chip .user-icon {
+    font-size: 15px;
+  }
+
+  #current-user-display {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .app-header .icon-btn {
+    width: 34px;
+    height: 34px;
+    padding: 4px;
+  }
+
+  /* 3. Selector de Sub-vista (Artículos / Carpetas / Logs) estilo control segmentado táctil */
+  .view-toggle-bar {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    width: 100%;
+    padding: 3px;
+    gap: 3px;
+    margin-bottom: 10px;
+  }
+
+  .view-toggle-btn {
+    justify-content: center;
+    padding: 7px 4px;
+    font-size: 0.76rem;
+    gap: 4px;
+  }
+
+  .view-toggle-btn .material-symbols-outlined {
+    font-size: 16px;
+  }
+
+  /* 4. Tarjetas de Estadísticas (Total / Verificados / Diferencias) ultra-compactas */
+  .stats-grid {
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .stat-card {
+    padding: 8px 4px;
+    border-radius: var(--radius-md);
+  }
+
+  .stat-value {
+    font-size: 1.2rem;
+    margin-bottom: 1px;
+  }
+
+  .stat-label {
+    font-size: 0.65rem;
+    letter-spacing: 0.2px;
+  }
+
+  /* 5. Botones Rápidos (WhatsApp y Excel CSV) en fila compacta 50/50 */
+  .zone-quick-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .zone-action-chip {
+    min-width: 0;
+    padding: 7px 8px;
+    font-size: 0.75rem;
+    border-radius: var(--radius-md);
+  }
+
+  /* 6. Calendario de Zona colapsable en móvil para no empujar los artículos hacia abajo */
+  .zone-calendar {
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    border-radius: var(--radius-md);
+  }
+
+  .zone-calendar-header {
+    margin-bottom: 0;
+  }
+
+  .zone-calendar-header h3 {
+    font-size: 0.84rem;
+    margin: 0;
+  }
+
+  .zc-chevron-mobile {
+    display: inline-flex;
+  }
+
+  .zone-calendar:not(.is-collapsed-mobile) .zc-chevron-mobile {
+    transform: rotate(180deg);
+  }
+
+  .zone-calendar.zone-calendar-empty .zone-calendar-list,
+  .zone-calendar.is-collapsed-mobile .zone-calendar-list {
     display: none;
   }
-  .article-actions-left {
+
+  .zone-calendar:not(.is-collapsed-mobile):not(.zone-calendar-empty) .zone-calendar-list {
+    margin-top: 8px;
+  }
+
+  /* 7. Barra de Búsqueda + Escáner + Filtros Fija (Sticky) al hacer scroll en la lista */
+  .filters-container {
+    position: sticky;
+    top: 53px;
+    z-index: 35;
+    background-color: var(--bg-color);
+    padding: 6px 0 8px;
+    margin-bottom: 10px;
+    gap: 8px;
+    box-shadow: 0 4px 10px -6px rgba(0, 0, 0, 0.25);
+  }
+
+  .search-box-with-scanner .input-field {
+    height: 40px;
+    font-size: 0.9rem;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+
+  .btn-scanner-trigger {
+    padding: 0 12px;
+    height: 40px;
+  }
+
+  .scanner-btn-label {
+    font-size: 0.78rem;
+  }
+
+  .filter-bar {
+    gap: 5px;
+    padding-bottom: 2px;
+  }
+
+  .filter-chip {
+    padding: 5px 10px;
+    font-size: 0.74rem;
+  }
+
+  /* 8. Tarjeta de Artículo rediseñada para operación con el pulgar a una sola mano */
+  .articles-list {
+    gap: 10px;
+  }
+
+  .article-card-header {
+    padding: 10px 12px 6px;
+    gap: 8px;
+  }
+
+  .article-thumb,
+  .article-thumb-placeholder {
+    width: 44px;
+    height: 44px;
+  }
+
+  .article-title {
+    font-size: 0.96rem;
+    line-height: 1.25;
+  }
+
+  /* Checkbox más grande y cómodo para el pulgar */
+  .checkbox-container input[type="checkbox"] {
+    width: 26px;
+    height: 26px;
+  }
+
+  .article-card-body {
+    padding: 6px 12px 10px;
+  }
+
+  /* Grilla de cantidades en celular:
+     Fila superior: [Cant. en Inventario] | [Diferencia]
+     Fila inferior (ancho completo): [Cant. Inventariada: (-) [input] (+) y botón = Igualar] */
+  .qty-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    padding: 8px;
+    margin-top: 6px;
+  }
+
+  /* Cant. en Inventario (1º) arriba a la izquierda */
+  .qty-grid > .qty-box:nth-child(1) {
+    order: 1;
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  /* Diferencia (3º) arriba a la derecha */
+  .qty-grid > .qty-box:nth-child(3) {
+    order: 2;
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .qty-grid > .qty-box:nth-child(1) .qty-label,
+  .qty-grid > .qty-box:nth-child(3) .qty-label {
+    margin-bottom: 0;
+    font-size: 0.7rem;
+    text-align: left;
+  }
+
+  .qty-grid > .qty-box:nth-child(1) .qty-value,
+  .qty-grid > .qty-box:nth-child(3) .qty-value {
+    font-size: 1.05rem;
+  }
+
+  /* Cant. Inventariada (2º) abajo ocupando todo el ancho con controles grandes */
+  .qty-grid > .qty-box.qty-box-interactive {
+    order: 3;
+    grid-column: 1 / -1;
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 8px;
+  }
+
+  .qty-grid > .qty-box.qty-box-interactive .qty-label {
+    margin-bottom: 0;
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: var(--text-main);
+    margin-right: auto;
+  }
+
+  .qty-stepper-wrapper {
+    border-width: 1.5px;
+    border-radius: var(--radius-md);
+  }
+
+  .qty-step-btn {
+    width: 42px;
+    height: 40px;
+    font-size: 1.3rem;
+  }
+
+  .qty-stepper-wrapper .qty-input {
+    width: 64px;
+    height: 40px;
+    font-size: 1.1rem;
+  }
+
+  .btn-qty-match {
+    padding: 7px 11px;
+    font-size: 0.75rem;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* Comentarios y atribución de autor más limpios en móvil */
+  .article-comment {
+    margin-top: 8px;
+    padding: 7px 10px;
+    font-size: 0.8rem;
+  }
+
+  .article-author-meta {
+    margin-top: 6px;
+    padding-top: 5px;
+    font-size: 0.68rem;
+    gap: 4px 10px;
+  }
+
+  /* Pie de tarjeta de artículo con botones táctiles bien espaciados */
+  .article-card-footer {
+    padding: 8px 10px;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .article-actions-left {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1;
+  }
+
+  .article-actions-left .btn-sm {
+    min-height: 34px;
+    padding: 5px 10px;
+    font-size: 0.75rem;
+  }
+
+  .article-actions-right {
+    gap: 2px;
+  }
+
+  .article-actions-right .icon-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  /* 9. Botón Flotante (FAB +) ergonómico en esquina inferior derecha */
+  .fab {
+    bottom: 16px;
+    right: 16px;
+    width: 56px;
+    height: 56px;
+    box-shadow: 0 6px 20px rgba(79, 70, 229, 0.45);
+  }
+
+  /* 10. Modales estilo "Bottom Sheet" nativo de celular (no los tapa el teclado virtual) */
+  .modal-container {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal-card {
+    max-width: 100%;
+    width: 100%;
+    border-radius: 20px 20px 0 0;
+    max-height: 90dvh;
+    padding: 16px 14px 20px;
+    margin: 0;
+    animation: slideUpSheet 0.22s ease-out;
+  }
+
+  @keyframes slideUpSheet {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+
+  /* Evita el auto-zoom molesto en iOS y Android al tocar inputs dentro de modales */
+  .modal-card .input-field,
+  .modal-card input[type="text"],
+  .modal-card input[type="number"],
+  .modal-card input[type="date"],
+  .modal-card input[type="password"],
+  .modal-card textarea,
+  .modal-card select {
+    font-size: 16px !important;
+  }
+
+  .modal-footer {
+    gap: 8px;
+    padding-top: 12px;
+  }
+
+  .modal-footer .btn {
+    flex: 1;
+    min-height: 44px;
+    font-size: 0.92rem;
+  }
+
+  /* Chips de motivos frecuentes más cómodos de tocar con el pulgar */
+  .quick-tag-chip {
+    padding: 7px 11px;
+    font-size: 0.78rem;
+  }
+
+  .btn-voice-dictate {
+    padding: 5px 12px;
+    font-size: 0.8rem;
+  }
+}
+
+@media (max-width: 390px) {
+  .scanner-btn-label {
+    display: none;
   }
 }

@@ -711,7 +711,7 @@ const InventoryUI = (() => {
             </button>
           ` : ''}
           <button type="button" class="btn btn-sm ${needsPlanHighlight ? 'btn-plan-highlight' : 'btn-outlined'} btn-open-plan-modal" data-id="${art.id}" title="Crear o ver Plan de Acción para este artículo">
-            <span class="material-symbols-outlined text-icon">event_Task</span>
+            <span class="material-symbols-outlined text-icon">add_task</span>
             + Plan
           </button>
           <button type="button" class="btn btn-sm btn-outlined btn-article-history" data-id="${art.id}" title="Ver historial de conteos de este artículo">
@@ -1163,17 +1163,43 @@ const InventoryUI = (() => {
     container.innerHTML = '';
 
     const upcoming = (plans || []).slice().sort((a,b)=> new Date(a.startDate) - new Date(b.startDate));
+    const activeCount = upcoming.filter(p => p.status !== 'completado').length;
+
+    container.classList.toggle('zone-calendar-empty', upcoming.length === 0);
+    // En móvil iniciamos colapsado para dar prioridad inmediata a los artículos
+    if (window.innerWidth <= 640 && !container.dataset.userToggled) {
+      container.classList.add('is-collapsed-mobile');
+    }
 
     const header = document.createElement('div');
     header.className = 'zone-calendar-header';
-    header.innerHTML = `<h3>Calendario de la Zona</h3><button class="btn btn-sm btn-outlined" id="btn-open-full-calendar">Abrir calendario</button>`;
+    header.innerHTML = `
+      <div class="zc-header-title-group" id="btn-toggle-mobile-calendar" title="Mostrar / ocultar planes programados">
+        <span class="material-symbols-outlined zc-cal-icon">event_note</span>
+        <h3>Planes de Acción</h3>
+        <span class="zc-count-pill ${activeCount > 0 ? 'has-active' : ''}">${upcoming.length === 0 ? '0' : `${activeCount} act. / ${upcoming.length}`}</span>
+        ${upcoming.length > 0 ? `<span class="material-symbols-outlined zc-chevron-mobile">expand_more</span>` : ''}
+      </div>
+      <button class="btn btn-sm btn-outlined" id="btn-open-full-calendar">
+        <span class="material-symbols-outlined text-icon">calendar_month</span>
+        Calendario
+      </button>
+    `;
     container.appendChild(header);
+
+    const toggleGroup = header.querySelector('#btn-toggle-mobile-calendar');
+    if (toggleGroup && upcoming.length > 0) {
+      toggleGroup.addEventListener('click', () => {
+        container.dataset.userToggled = 'true';
+        container.classList.toggle('is-collapsed-mobile');
+      });
+    }
 
     const list = document.createElement('div');
     list.className = 'zone-calendar-list';
 
     if (upcoming.length === 0) {
-      list.innerHTML = `<div class="empty-state small">No hay planes de acción programados.</div>`;
+      list.innerHTML = `<div class="empty-state small">No hay planes de acción programados. Usa "+ Plan" en cualquier artículo con novedad.</div>`;
     } else {
       upcoming.slice(0,6).forEach(p => {
         const item = document.createElement('div');

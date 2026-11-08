@@ -3,7 +3,7 @@
  * Permite el funcionamiento offline almacenando los recursos estáticos en caché.
  */
 
-const CACHE_NAME = 'inventory-pwa-v9';
+const CACHE_NAME = 'inventory-pwa-v10';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
